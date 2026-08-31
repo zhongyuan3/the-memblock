@@ -1045,6 +1045,29 @@ mod tests {
     }
 
     #[test]
+    fn free_mem_ranges_skips_adjacent_unmerged_reserved() {
+        // Two reserved regions sharing a boundary (differing flags prevent
+        // merging) must not make the iterator skip the following free range.
+        let mut mb = Memblock::<usize, 8>::new();
+        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.reserve(0x1800, 0x100).unwrap();
+        mb.reserve_kern(0x1900, 0x100).unwrap();
+        mb.reserve(0x1d00, 0x100).unwrap();
+
+        let mut it = mb.free_mem_ranges(MemblockFlags::NONE);
+        assert_eq!(it.next(), Some((0x1000, 0x1800)));
+        assert_eq!(it.next(), Some((0x1a00, 0x1d00)));
+        assert_eq!(it.next(), Some((0x1e00, 0x2000)));
+        assert_eq!(it.next(), None);
+
+        let mut it = mb.free_mem_ranges(MemblockFlags::NONE).rev();
+        assert_eq!(it.next(), Some((0x1e00, 0x2000)));
+        assert_eq!(it.next(), Some((0x1a00, 0x1d00)));
+        assert_eq!(it.next(), Some((0x1000, 0x1800)));
+        assert_eq!(it.next(), None);
+    }
+
+    #[test]
     fn free_mem_ranges_is_double_ended() {
         let mut mb = Memblock::<usize, 8>::new();
         mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();

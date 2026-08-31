@@ -185,13 +185,13 @@ pub mod range {
                         let base = max(m_base, r_base);
                         let end = min(m_end, r_end);
 
-                        if m_end <= r_end {
-                            self.m_lo += 1;
-                        } else {
-                            self.r_lo += 1;
-                        }
-
                         if end > base {
+                            if m_end <= r_end {
+                                self.m_lo += 1;
+                            } else {
+                                self.r_lo += 1;
+                            }
+
                             if end <= self.bwd_base {
                                 self.fwd_end = self.fwd_end.max(end);
                                 return Some((base, end));
@@ -202,6 +202,9 @@ pub mod range {
                         }
                     }
 
+                    // A zero-width overlap (adjacent reserved regions that
+                    // are not merged because of differing attributes) yields
+                    // nothing; the trailing increment moves past it.
                     self.r_lo += 1;
                 }
 
@@ -262,13 +265,13 @@ pub mod range {
                         let base = max(m_base, r_base);
                         let end = min(m_end, r_end);
 
-                        if m_base >= r_base {
-                            self.m_hi -= 1;
-                        } else {
-                            self.r_hi -= 1;
-                        }
-
                         if end > base {
+                            if m_base >= r_base {
+                                self.m_hi -= 1;
+                            } else {
+                                self.r_hi -= 1;
+                            }
+
                             if base >= self.fwd_end {
                                 self.bwd_base = self.bwd_base.min(base);
                                 return Some((base, end));
@@ -279,6 +282,9 @@ pub mod range {
                         }
                     }
 
+                    // A zero-width overlap (adjacent reserved regions that
+                    // are not merged because of differing attributes) yields
+                    // nothing; the trailing decrement moves past it.
                     self.r_hi -= 1;
                 }
 
