@@ -1,6 +1,6 @@
 [package]
 name = "the-memblock"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A no_std reimplementation of the Linux kernel's memblock early-boot memory allocator"
 license = "MIT"
