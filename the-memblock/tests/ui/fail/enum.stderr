@@ -1,0 +1,5 @@
+error: `#[derive(PhysAddr)]` cannot be applied to an enum
+ --> tests/ui/fail/enum.rs:4:1
+  |
+4 | enum NotAStruct {
+  | ^^^^

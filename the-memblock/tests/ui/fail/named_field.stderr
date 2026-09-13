@@ -1,0 +1,8 @@
+error: `#[derive(PhysAddr)]` only supports tuple structs with a single unnamed field, e.g. `struct Addr(usize)`
+ --> tests/ui/fail/named_field.rs:4:19
+  |
+4 |   struct NamedField {
+  |  ___________________^
+5 | |     x: usize,
+6 | | }
+  | |_^

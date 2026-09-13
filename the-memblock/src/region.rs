@@ -64,3 +64,58 @@ impl<T: PhysAddr> MemblockRegion<T> {
         self.flags
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_has_no_flags() {
+        let r = MemblockRegion::new(0x1000usize, 0x200);
+        assert_eq!(r.base(), 0x1000);
+        assert_eq!(r.size(), 0x200);
+        assert_eq!(r.flags(), MemblockFlags::NONE);
+    }
+
+    #[test]
+    fn with_flags_sets_flags() {
+        let r = MemblockRegion::with_flags(0x1000usize, 0x200, MemblockFlags::NOMAP);
+        assert_eq!(r.base(), 0x1000);
+        assert_eq!(r.size(), 0x200);
+        assert!(r.flags().contains(MemblockFlags::NOMAP));
+    }
+
+    #[test]
+    fn end_is_base_plus_size() {
+        let r = MemblockRegion::new(0x1000usize, 0x200);
+        assert_eq!(r.end(), 0x1200);
+    }
+
+    #[test]
+    fn end_saturates_at_max() {
+        let top = usize::MAX - 0xf;
+        let r = MemblockRegion::new(top, 0x100);
+        assert_eq!(r.end(), usize::MAX);
+    }
+
+    #[test]
+    fn empty_region_is_zero_sized() {
+        let r = MemblockRegion::<usize>::EMPTY;
+        assert_eq!(r.base(), 0);
+        assert_eq!(r.size(), 0);
+        assert_eq!(r.flags(), MemblockFlags::NONE);
+        assert_eq!(r, MemblockRegion::new(0, 0));
+    }
+
+    #[test]
+    fn region_is_copy_and_eq() {
+        let a = MemblockRegion::new(0x1000usize, 0x200);
+        let b = a;
+        assert_eq!(a, b);
+        assert_ne!(a, MemblockRegion::new(0x1000, 0x201));
+        assert_ne!(
+            a,
+            MemblockRegion::with_flags(0x1000, 0x200, MemblockFlags::NOMAP)
+        );
+    }
+}

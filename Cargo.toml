@@ -1,14 +1,3 @@
-[package]
-name = "the-memblock"
-version = "0.1.1"
-edition = "2024"
-description = "A no_std reimplementation of the Linux kernel's memblock early-boot memory allocator"
-license = "MIT"
-repository = "https://github.com/zhongyuan3/the-memblock"
-readme = "README.md"
-keywords = ["no-std", "memory-allocator", "boot", "physical-memory"]
-categories = ["no-std", "memory-management"]
-rust-version = "1.85"
-
-[dependencies]
-bitflags = "2.13.0"
+[workspace]
+members = ["the-memblock", "the-memblock-derive"]
+resolver = "2"

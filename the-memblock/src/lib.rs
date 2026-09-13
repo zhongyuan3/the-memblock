@@ -7,13 +7,18 @@
 //! aside for allocations). It provides primitives to add and remove ranges,
 //! query the current layout, allocate aligned blocks of free memory
 //! (top-down or bottom-up), and set per-region attributes such as `NOMAP` or
-//! `MIRROR`. The [`PhysAddr`](addr::PhysAddr) address type and the
-//! standalone address and page frame number (PFN) arithmetic helpers live
-//! in [`addr`].
+//! `MIRROR`. The [`PhysAddr`] address type and the address
+//! and page frame number (PFN) arithmetic it provides live in [`addr`].
+//! The [`PhysAddr`] trait is implemented for every unsigned primitive; the
+//! [`#[derive(PhysAddr)]`](crate::PhysAddr) macro transparently implements it
+//! for single-field wrapper types such as `struct Addr(usize)`.
 //!
 //! [memblock]: https://www.kernel.org/doc/html/latest/core-api/boot-time-mm.html
 
 #![no_std]
+
+pub use crate::addr::PhysAddr;
+pub use the_memblock_derive::PhysAddr;
 
 pub mod addr;
 pub mod error;

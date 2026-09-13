@@ -44,6 +44,33 @@ let base = mb.phys_alloc(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
 assert_eq!(base, 0xBFFF_F000);
 ```
 
+## Custom address types
+
+The `PhysAddr` trait is implemented for every unsigned primitive, but you can
+wrap a primitive in your own type with the `#[derive(PhysAddr)]` macro. The
+derive transparently forwards all address arithmetic to the inner type and
+also provides the supertrait implementations the trait requires
+(`Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Debug`,
+`Add`, `Sub`):
+
+```rust
+use the_memblock::flags::MemblockFlags;
+use the_memblock::memblock::Memblock;
+use the_memblock::PhysAddr;
+
+#[derive(PhysAddr)]
+#[repr(transparent)]
+struct Addr(usize);
+
+let mut mb = Memblock::<Addr, 8>::new();
+mb.add(Addr(0x1000), Addr(0x1000), MemblockFlags::NONE).unwrap();
+let base = mb.phys_alloc(Addr(0x100), Addr(0x100), MemblockFlags::NONE).unwrap();
+assert_eq!(base, Addr(0x1f00));
+```
+
+Only concrete single-field tuple structs are supported. Wrap a type that
+already implements `PhysAddr` (such as a primitive).
+
 ## License
 
 MIT. See [LICENSE-MIT](LICENSE-MIT).
