@@ -1,5 +1,9 @@
 # the-memblock
 
+[![crates.io](https://img.shields.io/crates/v/the-memblock)](https://crates.io/crates/the-memblock)
+[![docs.rs](https://img.shields.io/docsrs/the-memblock)](https://docs.rs/the-memblock)
+[![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A `no_std` reimplementation of the Linux kernel's [memblock] early-boot
 memory allocator.
 
@@ -9,7 +13,13 @@ aside for allocations). It provides primitives to add and remove ranges,
 query the current layout, allocate aligned blocks of free memory (top-down
 or bottom-up), and set per-region attributes such as `NOMAP` or `MIRROR`.
 
+This crate is part of the [the-memblock] workspace; its `#[derive(PhysAddr)]`
+proc-macro lives in the [`the-memblock-derive`] crate and is re-exported
+here. See [`CHANGELOG.md`](CHANGELOG.md) for the release history.
+
 [memblock]: https://www.kernel.org/doc/html/latest/core-api/boot-time-mm.html
+[the-memblock]: https://github.com/zhongyuan3/the-memblock
+[`the-memblock-derive`]: https://crates.io/crates/the-memblock-derive
 
 ## Features
 
@@ -73,4 +83,4 @@ already implements `PhysAddr` (such as a primitive).
 
 ## License
 
-MIT. See [LICENSE-MIT](LICENSE-MIT).
+MIT. See [LICENSE](LICENSE).

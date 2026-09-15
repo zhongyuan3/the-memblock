@@ -6,6 +6,7 @@ description = "A no_std reimplementation of the Linux kernel's memblock early-bo
 license = "MIT"
 repository = "https://github.com/zhongyuan3/the-memblock"
 readme = "README.md"
+documentation = "https://docs.rs/the-memblock"
 keywords = ["no-std", "memory-allocator", "boot", "physical-memory"]
 categories = ["no-std", "memory-management"]
 rust-version = "1.85"

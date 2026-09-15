@@ -5,6 +5,10 @@ edition = "2024"
 description = "Derive macro for the the_memblock::PhysAddr trait"
 license = "MIT"
 repository = "https://github.com/zhongyuan3/the-memblock"
+readme = "README.md"
+documentation = "https://docs.rs/the-memblock-derive"
+keywords = ["derive", "no-std", "memory-allocator", "physical-memory"]
+categories = ["no-std", "memory-management"]
 rust-version = "1.85"
 
 [lib]
