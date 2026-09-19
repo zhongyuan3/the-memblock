@@ -13,11 +13,18 @@
 //! [`#[derive(PhysAddr)]`](crate::PhysAddr) macro transparently implements it
 //! for single-field wrapper types such as `struct Addr(usize)`.
 //!
+//! Per-region attributes are generic: the [`RegionFlags`] trait describes a
+//! flag set, and the default [`MemblockFlags`](crate::flags::MemblockFlags)
+//! type implements the Linux kernel's `enum memblock_flags` semantics. Use a
+//! custom flag type with `Memblock<T, N, F>` to drive the allocator with
+//! your own attributes (see [`RegionFlags`]).
+//!
 //! [memblock]: https://www.kernel.org/doc/html/latest/core-api/boot-time-mm.html
 
 #![no_std]
 
 pub use crate::addr::PhysAddr;
+pub use crate::flags::RegionFlags;
 pub use the_memblock_derive::PhysAddr;
 
 pub mod addr;

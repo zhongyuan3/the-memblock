@@ -8,6 +8,7 @@ use crate::addr::cap_size;
 use crate::addr::saturating_add;
 use crate::error::Error;
 use crate::flags::MemblockFlags;
+use crate::flags::RegionFlags;
 use crate::iter::FreeMemRangeIter;
 use crate::iter::PfnRangeIter;
 use crate::region::MemblockRegion;
@@ -18,20 +19,20 @@ use crate::region::MemblockRegion;
 /// with identical flags are merged automatically. `total_size` tracks the
 /// sum of all region sizes.
 #[derive(Clone, Debug)]
-pub struct MemblockType<T: PhysAddr, const N: usize> {
-    regions: [MemblockRegion<T>; N],
+pub struct MemblockType<T: PhysAddr, const N: usize, F: RegionFlags = MemblockFlags> {
+    regions: [MemblockRegion<T, F>; N],
     cnt: usize,
     total_size: T,
 }
 
-impl<T: PhysAddr, const N: usize> PartialEq for MemblockType<T, N> {
+impl<T: PhysAddr, const N: usize, F: RegionFlags> PartialEq for MemblockType<T, N, F> {
     fn eq(&self, other: &Self) -> bool {
         self.regions[..self.cnt] == other.regions[..other.cnt]
             && self.total_size == other.total_size
     }
 }
 
-impl<T: PhysAddr, const N: usize> Eq for MemblockType<T, N> {}
+impl<T: PhysAddr, const N: usize, F: RegionFlags> Eq for MemblockType<T, N, F> {}
 
 /// The memblock allocator state, mirroring the kernel's `struct memblock`.
 ///
@@ -40,14 +41,14 @@ impl<T: PhysAddr, const N: usize> Eq for MemblockType<T, N> {}
 /// policy: `bottom_up` selects the search direction and `current_limit` caps
 /// the upper bound used by [`Memblock::phys_alloc`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Memblock<T: PhysAddr, const N: usize> {
-    memory: MemblockType<T, N>,
-    reserved: MemblockType<T, N>,
+pub struct Memblock<T: PhysAddr, const N: usize, F: RegionFlags = MemblockFlags> {
+    memory: MemblockType<T, N, F>,
+    reserved: MemblockType<T, N, F>,
     bottom_up: bool,
     current_limit: T,
 }
 
-impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
+impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
     fn move_regions(&mut self, src: usize, dst: usize, count: usize) -> Result<(), Error> {
         if count == 0 || src == dst {
             return Ok(());
@@ -85,7 +86,7 @@ impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
         }
     }
 
-    fn insert_region(&mut self, pos: usize, region: MemblockRegion<T>) -> Result<(), Error> {
+    fn insert_region(&mut self, pos: usize, region: MemblockRegion<T, F>) -> Result<(), Error> {
         if self.cnt >= self.regions.len() {
             return Err(Error::OverCapacity);
         }
@@ -120,7 +121,7 @@ impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
     ///
     /// Returns [`Error::OverCapacity`] if the fixed region array has no room
     /// left.
-    pub fn add(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
+    pub fn add(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
         let size = cap_size(base, size);
         if size == PhysAddr::ZERO {
             return Ok(());
@@ -277,7 +278,7 @@ impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
     }
 
     /// Returns the currently stored regions, sorted by `base`.
-    pub fn regions(&self) -> &[MemblockRegion<T>] {
+    pub fn regions(&self) -> &[MemblockRegion<T, F>] {
         &self.regions[..self.cnt]
     }
 
@@ -328,7 +329,7 @@ impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
         &mut self,
         base: T,
         size: T,
-        flag: MemblockFlags,
+        flag: F,
         set: bool,
     ) -> Result<(), Error> {
         let (start_rgn, end_rgn) = self.isolate_range(base, size)?;
@@ -346,7 +347,7 @@ impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
     }
 }
 
-impl<T: PhysAddr, const N: usize> Memblock<T, N> {
+impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Creates an empty memblock with no `memory` or `reserved` regions.
     pub const fn new() -> Self {
         Self {
@@ -366,17 +367,17 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     }
 }
 
-impl<T: PhysAddr, const N: usize> Default for Memblock<T, N> {
+impl<T: PhysAddr, const N: usize, F: RegionFlags> Default for Memblock<T, N, F> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: PhysAddr, const N: usize> Memblock<T, N> {
+impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Adds the range `[base, base + size)` to `memory`.
     ///
     /// See [`MemblockType::add`].
-    pub fn add(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
+    pub fn add(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
         self.memory.add(base, size, flags)
     }
 
@@ -392,17 +393,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// Mirrors the kernel's `memblock_reserve`, which records the region
     /// without special attributes.
     pub fn reserve(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.reserved.add(base, size, MemblockFlags::NONE)
-    }
-
-    /// Adds the range `[base, base + size)` to `reserved` and marks it
-    /// reserved for kernel use.
-    ///
-    /// Mirrors the kernel's `memblock_reserve_kern`; the allocation APIs
-    /// use this internally so that every memblock allocation carries
-    /// [`MemblockFlags::RSRV_KERN`].
-    pub fn reserve_kern(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.reserved.add(base, size, MemblockFlags::RSRV_KERN)
+        self.reserved.add(base, size, F::NONE)
     }
 
     /// Returns the base address of the first `memory` region, if any.
@@ -420,11 +411,12 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// within `[start, end]`.
     ///
     /// The search direction follows [`Memblock::bottom_up`]. Regions are
-    /// filtered by attribute: `NOMAP` and `DRIVER_MANAGED` regions are
-    /// skipped unless the corresponding flag is present in `flags`, while
-    /// `MIRROR` and `KHO_SCRATCH` regions are only considered when
-    /// explicitly requested. The range is treated as clamped to
-    /// `[start, end]`.
+    /// filtered by attribute according to [`RegionFlags::should_skip`]; for
+    /// the default [`MemblockFlags`] set, `NOMAP` and `DRIVER_MANAGED`
+    /// regions are skipped unless the corresponding flag is present in
+    /// `flags`, while `MIRROR` and `KHO_SCRATCH` regions are only
+    /// considered when explicitly requested. The range is treated as
+    /// clamped to `[start, end]`.
     ///
     /// Mirrors the kernel's `memblock_find_in_range_node` (minus the NUMA
     /// node selector). Note that unlike the allocation APIs, the result is
@@ -439,7 +431,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
         align: T,
         start: T,
         end: T,
-        flags: MemblockFlags,
+        flags: F,
     ) -> Option<(T, T)> {
         if self.bottom_up {
             for (r_start, r_end) in self.free_mem_ranges(flags) {
@@ -483,7 +475,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     ///
     /// Panics if `align` is zero or not a power of two.
     pub fn find_in_range(&self, start: T, end: T, size: T, align: T) -> Option<(T, T)> {
-        self.find_in_range_node(size, align, start, end, MemblockFlags::NONE)
+        self.find_in_range_node(size, align, start, end, F::NONE)
     }
 
     /// Allocates `size` bytes of aligned free memory within `[start, end]`.
@@ -491,7 +483,8 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// The search direction follows [`Memblock::bottom_up`] and the upper
     /// bound is clamped to [`Memblock::current_limit`], mirroring
     /// `memblock_alloc_internal`. The result is added to `reserved` with
-    /// [`MemblockFlags::RSRV_KERN`].
+    /// [`RegionFlags::ALLOC`] (for the default [`MemblockFlags`] set this is
+    /// `RSRV_KERN`).
     ///
     /// # Errors
     ///
@@ -504,7 +497,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
         align: T,
         start: T,
         end: T,
-        flags: MemblockFlags,
+        flags: F,
     ) -> Result<T, Error> {
         if size == PhysAddr::ZERO {
             return Err(Error::OutOfMemory);
@@ -513,7 +506,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
         let (base, found_end) = self
             .find_in_range_node(size, align, start, limit, flags)
             .ok_or(Error::OutOfMemory)?;
-        self.reserve_kern(base, found_end - base)?;
+        self.reserved.add(base, found_end - base, F::ALLOC)?;
         Ok(base)
     }
 
@@ -523,7 +516,8 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// The search direction follows [`Memblock::bottom_up`] and the upper
     /// bound is clamped to [`Memblock::current_limit`], mirroring the
     /// kernel's `memblock_phys_alloc_range`. The result is added to
-    /// `reserved` with [`MemblockFlags::RSRV_KERN`]; the `flags` argument
+    /// `reserved` with [`RegionFlags::ALLOC`] (for the default
+    /// [`MemblockFlags`] set this is `RSRV_KERN`); the `flags` argument
     /// only filters which `memory` regions may be allocated from (see
     /// [`Memblock::find_in_range_node`] for the filtering rules).
     ///
@@ -541,7 +535,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
         align: T,
         start: T,
         end: T,
-        flags: MemblockFlags,
+        flags: F,
     ) -> Result<T, Error> {
         self.alloc_internal(size, align, start, end, flags)
     }
@@ -584,9 +578,9 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     ///
     /// Equivalent to
     /// [`phys_alloc_range(size, align, T::ZERO, T::MAX, flags)`](Memblock::phys_alloc_range).
-    /// The result is added to `reserved` with [`MemblockFlags::RSRV_KERN`];
-    /// the `flags` argument only filters which `memory` regions may be
-    /// allocated from.
+    /// The result is added to `reserved` with [`RegionFlags::ALLOC`] (for
+    /// the default [`MemblockFlags`] set this is `RSRV_KERN`); the `flags`
+    /// argument only filters which `memory` regions may be allocated from.
     ///
     /// Mirrors the kernel's `memblock_phys_alloc`.
     ///
@@ -598,7 +592,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     ///
     /// Returns [`Error::OutOfMemory`] if `size` is zero or no suitable free
     /// region exists, or [`Error::OverCapacity`] if the region array is full.
-    pub fn phys_alloc(&mut self, size: T, align: T, flags: MemblockFlags) -> Result<T, Error> {
+    pub fn phys_alloc(&mut self, size: T, align: T, flags: F) -> Result<T, Error> {
         self.alloc_internal(size, align, PhysAddr::ZERO, PhysAddr::MAX, flags)
     }
 
@@ -622,11 +616,12 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// A range is free when it belongs to `memory` but not to `reserved`,
     /// i.e. `memory - reserved`. Mirrors the kernel's
     /// `for_each_free_mem_range`. Regions whose attributes are excluded by
-    /// `flags` are skipped, e.g. pass [`MemblockFlags::NOMAP`] to include NOMAP
-    /// regions.
+    /// `flags` are skipped according to [`RegionFlags::should_skip`], e.g.
+    /// with the default [`MemblockFlags`] set, pass
+    /// [`MemblockFlags::NOMAP`] to include NOMAP regions.
     ///
     /// [`MemblockFlags::NOMAP`]: crate::flags::MemblockFlags::NOMAP
-    pub fn free_mem_ranges(&self, flags: MemblockFlags) -> FreeMemRangeIter<'_, T, N> {
+    pub fn free_mem_ranges(&self, flags: F) -> FreeMemRangeIter<'_, T, N, F> {
         FreeMemRangeIter::new(&self.memory, Some(&self.reserved), flags)
     }
 
@@ -639,18 +634,18 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// # Panics
     ///
     /// Panics if `page_size` is zero.
-    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T, N> {
+    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T, N, F> {
         assert!(page_size != PhysAddr::ZERO, "page_size must be non-zero");
         PfnRangeIter::new(&self.memory, page_size)
     }
 
     /// Returns the reserved region collection.
-    pub fn reserved(&self) -> &MemblockType<T, N> {
+    pub fn reserved(&self) -> &MemblockType<T, N, F> {
         &self.reserved
     }
 
     /// Returns the memory region collection.
-    pub fn memory(&self) -> &MemblockType<T, N> {
+    pub fn memory(&self) -> &MemblockType<T, N, F> {
         &self.memory
     }
 
@@ -710,6 +705,50 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// an intersection rather than full containment.
     pub fn is_region_reserved(&self, base: T, size: T) -> bool {
         self.reserved.overlaps_region(base, size)
+    }
+
+    /// Sets the given `flags` on the `memory` range `[base, base + size)`.
+    ///
+    /// The generic counterpart of the Linux-specific `mark_*` methods: it
+    /// works for any [`RegionFlags`] set.
+    pub fn mark_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
+        self.memory.set_flag(base, size, flags, true)
+    }
+
+    /// Clears the given `flags` on the `memory` range `[base, base + size)`.
+    ///
+    /// The generic counterpart of the Linux-specific `clear_*` methods: it
+    /// works for any [`RegionFlags`] set.
+    pub fn clear_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
+        self.memory.set_flag(base, size, flags, false)
+    }
+
+    /// Sets the given `flags` on the `reserved` range `[base, base + size)`.
+    ///
+    /// The generic counterpart of the Linux-specific `reserved_mark_*`
+    /// methods: it works for any [`RegionFlags`] set.
+    pub fn reserved_mark_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
+        self.reserved.set_flag(base, size, flags, true)
+    }
+
+    /// Clears the given `flags` on the `reserved` range `[base, base + size)`.
+    ///
+    /// The generic counterpart of the Linux-specific `reserved_clear_*`
+    /// methods: it works for any [`RegionFlags`] set.
+    pub fn reserved_clear_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
+        self.reserved.set_flag(base, size, flags, false)
+    }
+}
+
+impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
+    /// Adds the range `[base, base + size)` to `reserved` and marks it
+    /// reserved for kernel use.
+    ///
+    /// Mirrors the kernel's `memblock_reserve_kern`; the allocation APIs
+    /// use this internally so that every memblock allocation carries
+    /// [`MemblockFlags::RSRV_KERN`].
+    pub fn reserve_kern(&mut self, base: T, size: T) -> Result<(), Error> {
+        self.reserved.add(base, size, MemblockFlags::RSRV_KERN)
     }
 
     /// Marks the `memory` range `[base, base + size)` as hotpluggable.
@@ -815,28 +854,17 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N> {
 
 /// Returns `true` if a `memory` region's attributes are excluded by `flags`.
 ///
-/// `NOMAP` and `DRIVER_MANAGED` regions are skipped unless the corresponding
-/// flag is present in `flags`; `MIRROR` and `KHO_SCRATCH` regions are only
-/// iterated when explicitly requested.
-///
-/// Mirrors the kernel's `should_skip_region` applied to `memblock.memory`.
-pub(crate) fn should_skip_region<T: PhysAddr>(r: MemblockRegion<T>, flags: MemblockFlags) -> bool {
-    if !flags.contains(MemblockFlags::NOMAP) && r.flags().contains(MemblockFlags::NOMAP) {
-        return true;
-    }
-    if !flags.contains(MemblockFlags::DRIVER_MANAGED)
-        && r.flags().contains(MemblockFlags::DRIVER_MANAGED)
-    {
-        return true;
-    }
-    if flags.contains(MemblockFlags::MIRROR) && !r.flags().contains(MemblockFlags::MIRROR) {
-        return true;
-    }
-    if flags.contains(MemblockFlags::KHO_SCRATCH) && !r.flags().contains(MemblockFlags::KHO_SCRATCH)
-    {
-        return true;
-    }
-    false
+/// Delegates to [`RegionFlags::should_skip`]. For the default
+/// [`MemblockFlags`] set this mirrors the kernel's `should_skip_region`
+/// applied to `memblock.memory`: `NOMAP` and `DRIVER_MANAGED` regions are
+/// skipped unless the corresponding flag is present in `flags`, while
+/// `MIRROR` and `KHO_SCRATCH` regions are only iterated when explicitly
+/// requested.
+pub(crate) fn should_skip_region<T: PhysAddr, F: RegionFlags>(
+    r: MemblockRegion<T, F>,
+    flags: F,
+) -> bool {
+    F::should_skip(r.flags(), flags)
 }
 
 #[cfg(test)]

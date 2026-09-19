@@ -3,41 +3,36 @@
 use crate::addr::PhysAddr;
 use crate::addr::saturating_add;
 use crate::flags::MemblockFlags;
+use crate::flags::RegionFlags;
 
 /// A contiguous range of physical memory `[base, base + size)`.
 ///
 /// Regions are never allowed to overlap within a [`MemblockType`] and are
 /// kept sorted by `base`.
 ///
+/// Generic over the per-region attribute set `F` (see [`RegionFlags`]); the
+/// default is the Linux-modeled [`MemblockFlags`].
+///
 /// [`MemblockType`]: crate::memblock::MemblockType
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MemblockRegion<T: PhysAddr> {
+pub struct MemblockRegion<T: PhysAddr, F: RegionFlags = MemblockFlags> {
     base: T,
     size: T,
-    flags: MemblockFlags,
+    flags: F,
 }
 
-impl<T: PhysAddr> MemblockRegion<T> {
+impl<T: PhysAddr, F: RegionFlags> MemblockRegion<T, F> {
     /// An empty region used to fill unused array slots.
-    pub const EMPTY: MemblockRegion<T> = MemblockRegion {
+    pub const EMPTY: MemblockRegion<T, F> = MemblockRegion {
         base: PhysAddr::ZERO,
         size: PhysAddr::ZERO,
-        flags: MemblockFlags::NONE,
+        flags: F::NONE,
     };
 
-    /// Creates a region with no special flags.
-    pub const fn new(base: T, size: T) -> Self {
-        Self {
-            base,
-            size,
-            flags: MemblockFlags::NONE,
-        }
-    }
-
-    /// Creates a region with the given [`flags`].
+    /// Creates a region with the given attributes.
     ///
-    /// [`flags`]: MemblockFlags
-    pub const fn with_flags(base: T, size: T, flags: MemblockFlags) -> Self {
+    /// [`flags`]: RegionFlags
+    pub const fn with_flags(base: T, size: T, flags: F) -> Self {
         Self { base, size, flags }
     }
 
@@ -60,8 +55,23 @@ impl<T: PhysAddr> MemblockRegion<T> {
     }
 
     /// Returns the attributes of the region.
-    pub const fn flags(self) -> MemblockFlags {
+    pub const fn flags(self) -> F {
         self.flags
+    }
+}
+
+impl<T: PhysAddr> MemblockRegion<T, MemblockFlags> {
+    /// Creates a region with no special flags.
+    ///
+    /// This constructor is only available for the default [`MemblockFlags`]
+    /// attribute set. Custom flag sets construct regions with
+    /// [`MemblockRegion::with_flags`] and [`RegionFlags::NONE`].
+    pub const fn new(base: T, size: T) -> Self {
+        Self {
+            base,
+            size,
+            flags: MemblockFlags::NONE,
+        }
     }
 }
 

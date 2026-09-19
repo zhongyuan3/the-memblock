@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Custom region flag sets.** The new [`RegionFlags`] trait makes the
+  per-region attribute set generic. `Memblock`, `MemblockType`,
+  `MemblockRegion` and the range iterators gained a defaulted type parameter
+  `F: RegionFlags = MemblockFlags`, so existing code is unchanged while
+  custom flag sets can be used as `Memblock<T, N, MyFlags>`. The default
+  [`MemblockFlags`] set keeps the Linux kernel semantics (`ALLOC` =
+  `RSRV_KERN` and the `should_skip_region` filtering policy).
+- Generic attribute mutation on `Memblock`: `mark_flags`, `clear_flags`,
+  `reserved_mark_flags` and `reserved_clear_flags`, usable with any flag
+  set. The Linux-specific `mark_*`/`clear_*`/`reserve_kern` methods are now
+  provided only for the default `MemblockFlags` set.
+- `RegionFlags` is re-exported at the crate root.
+
+### Compatibility
+
+The Linux-specific API (`MemblockFlags`, `reserve_kern`, `mark_*`,
+`clear_*`, `MemblockRegion::new`) is source-compatible for the default flag
+set. Custom flag sets construct regions with `MemblockRegion::with_flags`
+instead of `MemblockRegion::new`.
+
 ## [0.2.0]
 
 ### Breaking changes
