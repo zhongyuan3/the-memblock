@@ -337,9 +337,9 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
         for i in start_rgn..end_rgn {
             let r = self.regions[i];
             let new_flags = if set {
-                r.flags() | flag
+                r.flags().union(flag)
             } else {
-                r.flags() & !flag
+                r.flags().difference(flag)
             };
             self.regions[i] = MemblockRegion::with_flags(r.base(), r.size(), new_flags);
         }

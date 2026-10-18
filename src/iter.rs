@@ -115,11 +115,7 @@ impl<'a, T: PhysAddr, F: RegionFlags> FreeMemRangeIter<'a, T, F> {
         type_b: Option<&'a MemblockType<T, N, F>>,
         flags: F,
     ) -> Self {
-        Self::from_slices(
-            type_a.regions(),
-            type_b.map(|t| t.regions()),
-            flags,
-        )
+        Self::from_slices(type_a.regions(), type_b.map(|t| t.regions()), flags)
     }
 
     pub(crate) fn from_slices(

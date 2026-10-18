@@ -108,22 +108,14 @@ use the_memblock::memblock::Memblock;
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct MyFlags(u8);
 
-// Bitwise operations + `NONE` + a `should_skip` policy must be provided.
-impl core::ops::BitOr for MyFlags {
-    type Output = Self;
-    fn bitor(self, o: Self) -> Self { Self(self.0 | o.0) }
-}
-impl core::ops::BitAnd for MyFlags {
-    type Output = Self;
-    fn bitand(self, o: Self) -> Self { Self(self.0 & o.0) }
-}
-impl core::ops::Not for MyFlags {
-    type Output = Self;
-    fn not(self) -> Self { Self(!self.0) }
-}
-
+// `NONE`, the set operations and a `should_skip` policy must be provided.
 impl RegionFlags for MyFlags {
     const NONE: Self = Self(0);
+
+    fn union(self, o: Self) -> Self { Self(self.0 | o.0) }
+    fn intersection(self, o: Self) -> Self { Self(self.0 & o.0) }
+    fn difference(self, o: Self) -> Self { Self(self.0 & !o.0) }
+
     fn should_skip(_region: Self, _requested: Self) -> bool { false }
 }
 

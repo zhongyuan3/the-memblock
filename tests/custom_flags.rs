@@ -1,16 +1,12 @@
 //! End-to-end tests for a custom flag set driving the generic memblock API.
 
-use core::ops::BitAnd;
-use core::ops::BitOr;
-use core::ops::Not;
-
 use the_memblock::error::Error;
 use the_memblock::flags::RegionFlags;
 use the_memblock::memblock::Memblock;
 use the_memblock::region::MemblockRegion;
 
 /// A hand-rolled custom attribute set, showing that custom flags need not be
-/// built on `bitflags!`.
+/// built on `bitflags!` and do not need bitwise operator implementations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MyFlags(u8);
 
@@ -23,30 +19,21 @@ impl MyFlags {
     const TAGGED: Self = Self(0x4);
 }
 
-impl BitOr for MyFlags {
-    type Output = Self;
-    fn bitor(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-}
-
-impl BitAnd for MyFlags {
-    type Output = Self;
-    fn bitand(self, other: Self) -> Self {
-        Self(self.0 & other.0)
-    }
-}
-
-impl Not for MyFlags {
-    type Output = Self;
-    fn not(self) -> Self {
-        Self(!self.0)
-    }
-}
-
 impl RegionFlags for MyFlags {
     const NONE: Self = Self(0);
     const ALLOC: Self = Self::TAGGED;
+
+    fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
 
     fn should_skip(region: Self, requested: Self) -> bool {
         // `EXCLUDED` regions are skipped unless requested.

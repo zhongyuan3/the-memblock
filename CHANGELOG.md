@@ -25,6 +25,12 @@ All notable changes to this project are documented in this file.
 - `find_in_range`'s documentation now correctly states that it still applies
   the `RegionFlags::should_skip` policy with the empty flag set (the default
   flags skip `NOMAP` and `DRIVER_MANAGED` regions).
+- **`RegionFlags` has explicit set operations.** The trait no longer requires
+  `BitOr`/`BitAnd`/`Not`; implementors provide `union`, `intersection` and
+  `difference`, and `contains` is derived from `intersection`. This lowers
+  the boilerplate for custom flag types and decouples the trait from one
+  particular bitwise representation. `MemblockFlags` implements the new
+  operations on top of `bitflags`.
 - Memblock depends only on `the-mm-core`; it has no dependency on the buddy
   or slab allocators. The `the-mm-core` crate is also re-exported at the
   crate root.

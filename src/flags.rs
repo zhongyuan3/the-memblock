@@ -7,9 +7,6 @@
 //! use their own attributes, e.g. on a `bitflags!` type of their own.
 
 use bitflags::bitflags;
-use core::ops::BitAnd;
-use core::ops::BitOr;
-use core::ops::Not;
 
 /// Per-region attribute flags.
 ///
@@ -23,14 +20,20 @@ use core::ops::Not;
 ///
 /// # Implementation
 ///
-/// Implement on any `Copy + Eq` type with the required bitwise operators,
-/// e.g. a `bitflags!` type:
+/// Implement on any `Copy + Eq` type. The set operations are explicit
+/// methods, so a custom type does not need to implement `BitOr`/`BitAnd`/
+/// `Not`:
 ///
 /// ```ignore
 /// use the_memblock::flags::RegionFlags;
 ///
 /// impl RegionFlags for MyFlags {
 ///     const NONE: Self = Self::empty();
+///
+///     fn union(self, other: Self) -> Self { self | other }
+///     fn intersection(self, other: Self) -> Self { self & other }
+///     fn difference(self, other: Self) -> Self { self & !other }
+///
 ///     fn should_skip(_region: Self, _requested: Self) -> bool {
 ///         false // no attribute-based filtering
 ///     }
@@ -44,9 +47,7 @@ use core::ops::Not;
 /// [`RegionFlags::should_skip`]: RegionFlags::should_skip
 /// [`RegionFlags::ALLOC`]: RegionFlags::ALLOC
 /// [`RegionFlags::NONE`]: RegionFlags::NONE
-pub trait RegionFlags:
-    Copy + Eq + BitOr<Output = Self> + BitAnd<Output = Self> + Not<Output = Self>
-{
+pub trait RegionFlags: Copy + Eq {
     /// The empty flag set.
     const NONE: Self;
 
@@ -56,9 +57,18 @@ pub trait RegionFlags:
     /// overrides this with `RSRV_KERN` to mirror the kernel.
     const ALLOC: Self = Self::NONE;
 
+    /// Returns the union of `self` and `other`.
+    fn union(self, other: Self) -> Self;
+
+    /// Returns the flags present in both `self` and `other`.
+    fn intersection(self, other: Self) -> Self;
+
+    /// Returns the flags present in `self` but not in `other`.
+    fn difference(self, other: Self) -> Self;
+
     /// Returns `true` if all flags in `other` are set in `self`.
     fn contains(self, other: Self) -> bool {
-        self & other == other
+        self.intersection(other) == other
     }
 
     /// Returns `true` if `self` has no flags set.
@@ -103,6 +113,18 @@ bitflags! {
 impl RegionFlags for MemblockFlags {
     const NONE: Self = MemblockFlags::NONE;
     const ALLOC: Self = MemblockFlags::RSRV_KERN;
+
+    fn union(self, other: Self) -> Self {
+        self | other
+    }
+
+    fn intersection(self, other: Self) -> Self {
+        self & other
+    }
+
+    fn difference(self, other: Self) -> Self {
+        self & !other
+    }
 
     fn should_skip(region: Self, requested: Self) -> bool {
         if !requested.contains(Self::NOMAP) && region.contains(Self::NOMAP) {
