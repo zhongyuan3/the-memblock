@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **The address traits moved to `the-mm-core`.** `PhysAddr` and its
+  overflow-safe arithmetic helpers (`saturating_add`, `cap_size`) now live in
+  the shared `the-mm-core` crate. `the_memblock::addr::PhysAddr` is a
+  re-export, so existing code and `#[derive(PhysAddr)]` keep working
+  unchanged.
+- **PFN conversions moved to `PageFrame`.** `pfn_up`/`pfn_down`/
+  `pfn_to_phys` are no longer part of `PhysAddr`: `PageFrame` now provides
+  `phys_to_pfn` (floor), `pfn_to_phys` and `pfn_ceil` (exact ceil).
+  `pfn_down` is replaced by `phys_to_pfn`, and `pfn_up` is renamed
+  `pfn_ceil`. `Memblock::mem_pfn_ranges` and `PfnRangeIter` now require
+  `T: PageFrame`; all other memblock APIs still need only `PhysAddr`.
+  `the-memblock` re-exports `PageFrame` for convenience.
+- **Iterator types no longer expose the region capacity.** `FreeMemRangeIter`
+  and `PfnRangeIter` are now `FreeMemRangeIter<'a, T, F>` and
+  `PfnRangeIter<'a, T, F>`; they borrow region slices instead of
+  `MemblockType<T, N, F>`. The constructors remain crate-internal.
+- `find_in_range`'s documentation now correctly states that it still applies
+  the `RegionFlags::should_skip` policy with the empty flag set (the default
+  flags skip `NOMAP` and `DRIVER_MANAGED` regions).
+- Memblock depends only on `the-mm-core`; it has no dependency on the buddy
+  or slab allocators. The `the-mm-core` crate is also re-exported at the
+  crate root.
+
 ## [0.2.1]
 
 ### Added

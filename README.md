@@ -17,6 +17,11 @@ This crate's `#[derive(PhysAddr)]` proc-macro lives in the
 [`the-memblock-derive`] crate, which is re-exported here. See
 [`CHANGELOG.md`](CHANGELOG.md) for the release history.
 
+The address traits (`PhysAddr`) live in the shared
+[`the-mm-core`](https://crates.io/crates/the-mm-core) crate and are
+re-exported here, so the same custom address type works with the buddy and
+slab allocators too. Memblock itself has no dependency on either of them.
+
 [memblock]: https://www.kernel.org/doc/html/latest/core-api/boot-time-mm.html
 [the-memblock]: https://github.com/zhongyuan3/the-memblock
 [`the-memblock-derive`]: https://crates.io/crates/the-memblock-derive
@@ -81,6 +86,12 @@ assert_eq!(base, Addr(0x1f00));
 
 Only concrete single-field tuple structs are supported. Wrap a type that
 already implements `PhysAddr` (such as a primitive).
+
+PFN conversions are not part of `PhysAddr`: they live in
+`the_mm_core::PageFrame`, because they are only meaningful for
+page-frame-capable address types. All primitives implement `PageFrame`; a
+custom address type that needs `Memblock::mem_pfn_ranges` must implement it
+(or use `#[derive(the_buddy_system::PageFrame)]`).
 
 ## Custom region flags
 

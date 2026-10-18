@@ -12,6 +12,7 @@ use crate::flags::RegionFlags;
 use crate::iter::FreeMemRangeIter;
 use crate::iter::PfnRangeIter;
 use crate::region::MemblockRegion;
+use the_mm_core::PageFrame;
 
 /// An ordered, fixed-capacity collection of memory regions.
 ///
@@ -467,9 +468,13 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     }
 
     /// Finds a free (unreserved) region of `size` bytes aligned to `align`
-    /// within `[start, end]`, without attribute-based filtering.
+    /// within `[start, end]`, using the empty flag set.
     ///
-    /// Mirrors the kernel's `memblock_find_in_range`.
+    /// Mirrors the kernel's `memblock_find_in_range`. Attribute filtering
+    /// still follows [`RegionFlags::should_skip`]; with the default
+    /// [`MemblockFlags`] set, `NOMAP` and `DRIVER_MANAGED` regions are
+    /// skipped. Use [`Memblock::find_in_range_node`] to request specific
+    /// attributes.
     ///
     /// # Panics
     ///
@@ -621,22 +626,8 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// [`MemblockFlags::NOMAP`] to include NOMAP regions.
     ///
     /// [`MemblockFlags::NOMAP`]: crate::flags::MemblockFlags::NOMAP
-    pub fn free_mem_ranges(&self, flags: F) -> FreeMemRangeIter<'_, T, N, F> {
+    pub fn free_mem_ranges(&self, flags: F) -> FreeMemRangeIter<'_, T, F> {
         FreeMemRangeIter::new(&self.memory, Some(&self.reserved), flags)
-    }
-
-    /// Iterates over the `memory` regions as page frame number (PFN) ranges
-    /// `[start_pfn, end_pfn)`.
-    ///
-    /// Mirrors the kernel's `for_each_mem_pfn_range`. `page_size` is the size
-    /// of a page. Regions that contain no full page are skipped.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `page_size` is zero.
-    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T, N, F> {
-        assert!(page_size != PhysAddr::ZERO, "page_size must be non-zero");
-        PfnRangeIter::new(&self.memory, page_size)
     }
 
     /// Returns the reserved region collection.
@@ -737,6 +728,26 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// methods: it works for any [`RegionFlags`] set.
     pub fn reserved_clear_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
         self.reserved.set_flag(base, size, flags, false)
+    }
+}
+
+impl<T: PageFrame, const N: usize, F: RegionFlags> Memblock<T, N, F> {
+    /// Iterates over the `memory` regions as page frame number (PFN) ranges
+    /// `[start_pfn, end_pfn)`.
+    ///
+    /// Mirrors the kernel's `for_each_mem_pfn_range`. `page_size` is the size
+    /// of a page. Regions that contain no full page are skipped.
+    ///
+    /// This is the only memblock API that requires [`PageFrame`]: computing
+    /// PFNs needs the address ↔ PFN conversions, while the rest of memblock
+    /// only needs [`PhysAddr`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `page_size` is zero.
+    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T, F> {
+        assert!(page_size != T::ZERO, "page_size must be non-zero");
+        PfnRangeIter::new(&self.memory, page_size)
     }
 }
 

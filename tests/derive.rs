@@ -1,6 +1,7 @@
 //! End-to-end tests for the `#[derive(PhysAddr)]` macro: a custom wrapper
 //! type drives the full memblock API just like a primitive address.
 
+use the_memblock::PageFrame;
 use the_memblock::PhysAddr;
 use the_memblock::error::Error;
 use the_memblock::flags::MemblockFlags;
@@ -11,6 +12,30 @@ const NONE: MemblockFlags = MemblockFlags::NONE;
 #[derive(PhysAddr)]
 #[repr(transparent)]
 struct Addr(usize);
+
+// PFN conversions live in `PageFrame`; only the PFN iterator needs this
+// impl, so the rest of the test exercises `#[derive(PhysAddr)]` alone.
+impl PageFrame for Addr {
+    fn try_to_usize(self) -> Option<usize> {
+        Some(self.0)
+    }
+
+    fn from_usize(index: usize) -> Self {
+        Addr(index)
+    }
+
+    fn phys_to_pfn(addr: Self, page_size: Self) -> Self {
+        Addr(addr.0 / page_size.0)
+    }
+
+    fn pfn_to_phys(pfn: Self, page_size: Self) -> Self {
+        Addr(pfn.0.saturating_mul(page_size.0))
+    }
+
+    fn pfn_ceil(addr: Self, page_size: Self) -> Self {
+        Addr(addr.0.div_ceil(page_size.0))
+    }
+}
 
 #[derive(PhysAddr)]
 struct U64Addr(u64);
@@ -34,9 +59,6 @@ fn derived_phys_addr_constants() {
 fn derived_arithmetic_methods_delegate() {
     assert_eq!(Addr::align_up(Addr(0x1), Addr(0x1000)), Addr(0x1000));
     assert_eq!(Addr::align_down(Addr(0x1fff), Addr(0x1000)), Addr(0x1000));
-    assert_eq!(Addr::pfn_up(Addr(0x1), Addr(0x1000)), Addr(1));
-    assert_eq!(Addr::pfn_down(Addr(0xfff), Addr(0x1000)), Addr(0));
-    assert_eq!(Addr::pfn_to_phys(Addr(2), Addr(0x1000)), Addr(0x2000));
     // Saturation near the top of the address space is preserved.
     assert_eq!(
         Addr::align_up(Addr(usize::MAX - 0x7f), Addr(0x100)),

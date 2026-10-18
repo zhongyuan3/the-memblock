@@ -7,11 +7,17 @@
 //! aside for allocations). It provides primitives to add and remove ranges,
 //! query the current layout, allocate aligned blocks of free memory
 //! (top-down or bottom-up), and set per-region attributes such as `NOMAP` or
-//! `MIRROR`. The [`PhysAddr`] address type and the address
-//! and page frame number (PFN) arithmetic it provides live in [`addr`].
+//! `MIRROR`. The [`PhysAddr`] address arithmetic lives in [`addr`] and is
+//! shared with the other allocator crates through [`the_mm_core`].
 //! The [`PhysAddr`] trait is implemented for every unsigned primitive; the
 //! [`#[derive(PhysAddr)]`](crate::PhysAddr) macro transparently implements it
 //! for single-field wrapper types such as `struct Addr(usize)`.
+//!
+//! Page frame number (PFN) conversions live in [`PageFrame`] (also from
+//! [`the_mm_core`]), because they are only meaningful for page-frame-capable
+//! address types. The PFN iterator [`Memblock::mem_pfn_ranges`] therefore
+//! requires `T: PageFrame`; the rest of the memblock API only needs
+//! [`PhysAddr`].
 //!
 //! Per-region attributes are generic: the [`RegionFlags`] trait describes a
 //! flag set, and the default [`MemblockFlags`]
@@ -20,9 +26,10 @@
 //! your own attributes (see [`RegionFlags`]).
 //!
 //! The main entry points — [`Memblock`], [`MemblockType`],
-//! [`MemblockRegion`], [`MemblockFlags`], [`Error`] and the range iterators
-//! [`FreeMemRangeIter`]/[`PfnRangeIter`] — are re-exported at the crate
-//! root; the same items are also available under their module paths.
+//! [`MemblockRegion`], [`MemblockFlags`], [`Error`], [`PhysAddr`],
+//! [`PageFrame`] and the range iterators [`FreeMemRangeIter`]/
+//! [`PfnRangeIter`] — are re-exported at the crate root; the same items are
+//! also available under their module paths.
 //!
 //! [memblock]: https://www.kernel.org/doc/html/latest/core-api/boot-time-mm.html
 
@@ -38,6 +45,8 @@ pub use crate::memblock::Memblock;
 pub use crate::memblock::MemblockType;
 pub use crate::region::MemblockRegion;
 pub use the_memblock_derive::PhysAddr;
+pub use the_mm_core;
+pub use the_mm_core::PageFrame;
 
 pub mod addr;
 pub mod error;
