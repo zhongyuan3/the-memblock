@@ -25,6 +25,9 @@ All notable changes to this project are documented in this file.
 - `find_in_range`'s documentation now correctly states that it still applies
   the `RegionFlags::should_skip` policy with the empty flag set (the default
   flags skip `NOMAP` and `DRIVER_MANAGED` regions).
+- **`find_in_range_node` renamed.** The method has no NUMA node selector, so
+  it is now `Memblock::find_in_range_with_flags`. The kernel reference in its
+  documentation still names `memblock_find_in_range_node`.
 - **`RegionFlags` has explicit set operations.** The trait no longer requires
   `BitOr`/`BitAnd`/`Not`; implementors provide `union`, `intersection` and
   `difference`, and `contains` is derived from `intersection`. This lowers

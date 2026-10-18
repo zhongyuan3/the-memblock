@@ -426,7 +426,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// # Panics
     ///
     /// Panics if `align` is zero or not a power of two.
-    pub fn find_in_range_node(
+    pub fn find_in_range_with_flags(
         &self,
         size: T,
         align: T,
@@ -473,14 +473,14 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Mirrors the kernel's `memblock_find_in_range`. Attribute filtering
     /// still follows [`RegionFlags::should_skip`]; with the default
     /// [`MemblockFlags`] set, `NOMAP` and `DRIVER_MANAGED` regions are
-    /// skipped. Use [`Memblock::find_in_range_node`] to request specific
+    /// skipped. Use [`Memblock::find_in_range_with_flags`] to request specific
     /// attributes.
     ///
     /// # Panics
     ///
     /// Panics if `align` is zero or not a power of two.
     pub fn find_in_range(&self, start: T, end: T, size: T, align: T) -> Option<(T, T)> {
-        self.find_in_range_node(size, align, start, end, F::NONE)
+        self.find_in_range_with_flags(size, align, start, end, F::NONE)
     }
 
     /// Allocates `size` bytes of aligned free memory within `[start, end]`.
@@ -509,7 +509,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
         }
         let limit = min(end, self.current_limit);
         let (base, found_end) = self
-            .find_in_range_node(size, align, start, limit, flags)
+            .find_in_range_with_flags(size, align, start, limit, flags)
             .ok_or(Error::OutOfMemory)?;
         self.reserved.add(base, found_end - base, F::ALLOC)?;
         Ok(base)
@@ -524,7 +524,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// `reserved` with [`RegionFlags::ALLOC`] (for the default
     /// [`MemblockFlags`] set this is `RSRV_KERN`); the `flags` argument
     /// only filters which `memory` regions may be allocated from (see
-    /// [`Memblock::find_in_range_node`] for the filtering rules).
+    /// [`Memblock::find_in_range_with_flags`] for the filtering rules).
     ///
     /// # Panics
     ///
@@ -1392,26 +1392,26 @@ mod tests {
     }
 
     #[test]
-    fn find_in_range_node_honors_flags() {
+    fn find_in_range_with_flags_honors_flags() {
         let mut mb = Memblock::<usize, 8>::new();
         mb.add(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
         assert!(
-            mb.find_in_range_node(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            mb.find_in_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
                 .is_none()
         );
         assert!(
-            mb.find_in_range_node(0x100, 0x100, 0, usize::MAX, MemblockFlags::NOMAP)
+            mb.find_in_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NOMAP)
                 .is_some()
         );
     }
 
     #[test]
-    fn find_in_range_node_bottom_up() {
+    fn find_in_range_with_flags_bottom_up() {
         let mut mb = Memblock::<usize, 8>::new();
         mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
         mb.set_bottom_up(true);
         let (base, _) = mb
-            .find_in_range_node(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .find_in_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
             .unwrap();
         assert_eq!(base, 0x1000);
     }
