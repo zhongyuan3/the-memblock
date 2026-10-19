@@ -40,23 +40,22 @@ slab allocators too. Memblock itself has no dependency on either of them.
   (`for_each_mem_range`, `for_each_free_mem_range`,
   `for_each_mem_pfn_range` counterparts).
 - Region flag management: `HOTPLUG`, `MIRROR`, `NOMAP`, `DRIVER_MANAGED`,
-  `RSRV_NOINIT`, `RSRV_KERN`, `KHO_SCRATCH`, generic over the attribute set
-  via the [`RegionFlags`] trait.
+  `RSRV_NOINIT`, `RSRV_KERN`, `KHO_SCRATCH`. Allocation APIs tag reserved
+  regions with `RSRV_KERN`.
 
 ## Usage
 
 ```rust
-use the_memblock::flags::MemblockFlags;
-use the_memblock::memblock::Memblock;
+use the_memblock::Memblock;
 
 let mut mb = Memblock::<u64, 16>::new();
 
 // Register physical memory and reserve the kernel image.
-mb.add(0x8000_0000, 0x4000_0000, MemblockFlags::NONE).unwrap();
+mb.add(0x8000_0000, 0x4000_0000).unwrap();
 mb.reserve_kern(0x8000_0000, 0x20_0000).unwrap();
 
 // Top-down allocation of a 4 KiB aligned block.
-let base = mb.phys_alloc(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+let base = mb.phys_alloc(0x1000, 0x1000).unwrap();
 assert_eq!(base, 0xBFFF_F000);
 ```
 
@@ -70,8 +69,7 @@ also provides the supertrait implementations the trait requires
 `Add`, `Sub`):
 
 ```rust
-use the_memblock::flags::MemblockFlags;
-use the_memblock::memblock::Memblock;
+use the_memblock::Memblock;
 use the_memblock::PhysAddr;
 
 #[derive(PhysAddr)]
@@ -79,8 +77,8 @@ use the_memblock::PhysAddr;
 struct Addr(usize);
 
 let mut mb = Memblock::<Addr, 8>::new();
-mb.add(Addr(0x1000), Addr(0x1000), MemblockFlags::NONE).unwrap();
-let base = mb.phys_alloc(Addr(0x100), Addr(0x100), MemblockFlags::NONE).unwrap();
+mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
+let base = mb.phys_alloc(Addr(0x100), Addr(0x100)).unwrap();
 assert_eq!(base, Addr(0x1f00));
 ```
 
@@ -93,44 +91,17 @@ page-frame-capable address types. All primitives implement `PageFrame`; a
 custom address type that needs `Memblock::mem_pfn_ranges` must implement it
 (or use `#[derive(the_buddy_system::PageFrame)]`).
 
-## Custom region flags
+## Region flags
 
-Per-region attributes are generic through the [`RegionFlags`] trait. The
-default [`MemblockFlags`] type implements the Linux kernel's
-`enum memblock_flags` semantics; implement [`RegionFlags`] on your own
-`Copy + Eq` flag type (e.g. a `bitflags!` type) to use it with any address
-type and capacity:
+Per-region attributes are represented by `MemblockFlags`, mirroring the
+kernel's `enum memblock_flags`. Allocation APIs tag the regions they reserve
+with `RSRV_KERN`.
 
-```rust
-use the_memblock::flags::RegionFlags;
-use the_memblock::memblock::Memblock;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct MyFlags(u8);
-
-// `NONE`, the set operations and a `should_skip` policy must be provided.
-impl RegionFlags for MyFlags {
-    const NONE: Self = Self(0);
-
-    fn union(self, o: Self) -> Self { Self(self.0 | o.0) }
-    fn intersection(self, o: Self) -> Self { Self(self.0 & o.0) }
-    fn difference(self, o: Self) -> Self { Self(self.0 & !o.0) }
-
-    fn should_skip(_region: Self, _requested: Self) -> bool { false }
-}
-
-let mut mb = Memblock::<u64, 16, MyFlags>::new();
-mb.add(0x8000_0000, 0x4000_0000, MyFlags::NONE).unwrap();
-let base = mb.phys_alloc(0x1000, 0x1000, MyFlags::NONE).unwrap();
-assert_eq!(base, 0xBFFF_F000);
-```
-
-The allocation APIs tag the regions they reserve with
-[`RegionFlags::ALLOC`] (defaulting to `NONE`; the Linux set uses
-`RSRV_KERN`). The generic `mark_flags`/`clear_flags` methods mutate
-attributes for any flag set, while the Linux-specific `mark_*`/`clear_*`
-methods and `MemblockRegion::new` are only available with the default
-[`MemblockFlags`] set.
+`Memblock::add`, `Memblock::phys_alloc` and `Memblock::phys_alloc_range` use
+the empty flag set; use `Memblock::add_with_flags`,
+`Memblock::phys_alloc_with_flags` or
+`Memblock::phys_alloc_range_with_flags` to pass explicit attributes.
+`mark_flags`/`clear_flags` update multiple attributes at once.
 
 ## License
 

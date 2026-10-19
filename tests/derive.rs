@@ -1,11 +1,11 @@
 //! End-to-end tests for the `#[derive(PhysAddr)]` macro: a custom wrapper
 //! type drives the full memblock API just like a primitive address.
 
+use the_memblock::Error;
+use the_memblock::Memblock;
+use the_memblock::MemblockFlags;
 use the_memblock::PageFrame;
 use the_memblock::PhysAddr;
-use the_memblock::error::Error;
-use the_memblock::flags::MemblockFlags;
-use the_memblock::memblock::Memblock;
 
 const NONE: MemblockFlags = MemblockFlags::NONE;
 
@@ -91,8 +91,8 @@ fn derived_supertrait_impls() {
 #[test]
 fn derived_type_allocates_top_down() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x1000), NONE).unwrap();
-    let p = mb.phys_alloc(Addr(0x100), Addr(0x100), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
+    let p = mb.phys_alloc(Addr(0x100), Addr(0x100)).unwrap();
     assert_eq!(p, Addr(0x1f00));
     assert!(mb.is_reserved(p));
     assert_eq!(mb.reserved_size(), Addr(0x100));
@@ -101,29 +101,29 @@ fn derived_type_allocates_top_down() {
 #[test]
 fn derived_type_allocates_bottom_up() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x1000), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
     mb.set_bottom_up(true);
-    let p = mb.phys_alloc(Addr(0x100), Addr(0x100), NONE).unwrap();
+    let p = mb.phys_alloc(Addr(0x100), Addr(0x100)).unwrap();
     assert_eq!(p, Addr(0x1000));
 }
 
 #[test]
 fn derived_type_free_roundtrip() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x1000), NONE).unwrap();
-    let p = mb.phys_alloc(Addr(0x100), Addr(0x100), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
+    let p = mb.phys_alloc(Addr(0x100), Addr(0x100)).unwrap();
     mb.phys_free(p, Addr(0x100)).unwrap();
     assert!(mb.reserved().is_empty());
-    assert!(mb.phys_alloc(Addr(0x100), Addr(0x100), NONE).is_ok());
+    assert!(mb.phys_alloc(Addr(0x100), Addr(0x100)).is_ok());
 }
 
 #[test]
 fn derived_type_near_max() {
     let mut mb = Memblock::<Addr, 8>::new();
     let top = Addr::MAX - Addr(0x1ff);
-    mb.add(top, Addr(0x200), NONE).unwrap();
+    mb.add(top, Addr(0x200)).unwrap();
     mb.set_bottom_up(true);
-    let p = mb.phys_alloc(Addr(0x80), Addr(0x100), NONE).unwrap();
+    let p = mb.phys_alloc(Addr(0x80), Addr(0x100)).unwrap();
     assert_eq!(p, top);
     // Sizes past the top of the address space are clamped.
     assert_eq!(mb.memory().regions()[0].end(), Addr::MAX);
@@ -132,8 +132,8 @@ fn derived_type_near_max() {
 #[test]
 fn derived_type_iterators() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x1000), NONE).unwrap();
-    mb.add(Addr(0x4000), Addr(0x1000), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
+    mb.add(Addr(0x4000), Addr(0x1000)).unwrap();
     mb.reserve(Addr(0x1800), Addr(0x100)).unwrap();
 
     let free: Vec<_> = mb.free_mem_ranges(NONE).collect();
@@ -153,7 +153,7 @@ fn derived_type_iterators() {
 #[test]
 fn derived_type_queries_and_flags() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x100), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x100)).unwrap();
     mb.mark_nomap(Addr(0x1040), Addr(0x20)).unwrap();
     assert!(
         mb.memory().regions()[1]
@@ -169,9 +169,9 @@ fn derived_type_queries_and_flags() {
 #[test]
 fn derived_type_out_of_memory() {
     let mut mb = Memblock::<Addr, 8>::new();
-    mb.add(Addr(0x1000), Addr(0x100), NONE).unwrap();
+    mb.add(Addr(0x1000), Addr(0x100)).unwrap();
     assert!(matches!(
-        mb.phys_alloc(Addr(0x200), Addr(0x100), NONE),
+        mb.phys_alloc(Addr(0x200), Addr(0x100)),
         Err(Error::OutOfMemory)
     ));
 }
@@ -179,12 +179,12 @@ fn derived_type_out_of_memory() {
 #[test]
 fn derived_type_over_u64() {
     let mut mb = Memblock::<U64Addr, 8>::new();
-    mb.add(U64Addr(0x8000_0000), U64Addr(0x4000_0000), NONE)
+    mb.add(U64Addr(0x8000_0000), U64Addr(0x4000_0000))
         .unwrap();
     mb.reserve_kern(U64Addr(0x8000_0000), U64Addr(0x20_0000))
         .unwrap();
     let p = mb
-        .phys_alloc(U64Addr(0x1000), U64Addr(0x1000), NONE)
+        .phys_alloc(U64Addr(0x1000), U64Addr(0x1000))
         .unwrap();
     assert_eq!(p, U64Addr(0xBFFF_F000));
 }

@@ -3,16 +3,38 @@
 use core::cmp::max;
 use core::cmp::min;
 
-use crate::addr::PhysAddr;
-use crate::addr::cap_size;
-use crate::addr::saturating_add;
-use crate::error::Error;
-use crate::flags::MemblockFlags;
-use crate::flags::RegionFlags;
 use crate::iter::FreeMemRangeIter;
 use crate::iter::PfnRangeIter;
-use crate::region::MemblockRegion;
+use crate::MemblockFlags;
+use crate::MemblockRegion;
+use crate::PhysAddr;
+use the_mm_core::addr::cap_size;
+use the_mm_core::addr::saturating_add;
 use the_mm_core::PageFrame;
+
+/// Error type returned by fallible memblock operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    /// The fixed-size region array has no free slots left.
+    OverCapacity,
+    /// An invariant was violated; indicates a bug in the implementation.
+    InternalError,
+    /// No suitable free memory could be found for an allocation.
+    OutOfMemory,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let s = match self {
+            Error::OverCapacity => "Over capacity",
+            Error::InternalError => "Internal error",
+            Error::OutOfMemory => "Out of memory",
+        };
+        write!(f, "{s}")
+    }
+}
+
+impl core::error::Error for Error {}
 
 /// An ordered, fixed-capacity collection of memory regions.
 ///
@@ -20,20 +42,20 @@ use the_mm_core::PageFrame;
 /// with identical flags are merged automatically. `total_size` tracks the
 /// sum of all region sizes.
 #[derive(Clone, Debug)]
-pub struct MemblockType<T: PhysAddr, const N: usize, F: RegionFlags = MemblockFlags> {
-    regions: [MemblockRegion<T, F>; N],
+pub struct MemblockType<T: PhysAddr, const N: usize> {
+    regions: [MemblockRegion<T>; N],
     cnt: usize,
     total_size: T,
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> PartialEq for MemblockType<T, N, F> {
+impl<T: PhysAddr, const N: usize> PartialEq for MemblockType<T, N> {
     fn eq(&self, other: &Self) -> bool {
         self.regions[..self.cnt] == other.regions[..other.cnt]
             && self.total_size == other.total_size
     }
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> Eq for MemblockType<T, N, F> {}
+impl<T: PhysAddr, const N: usize> Eq for MemblockType<T, N> {}
 
 /// The memblock allocator state, mirroring the kernel's `struct memblock`.
 ///
@@ -42,14 +64,14 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Eq for MemblockType<T, N, F> {
 /// policy: `bottom_up` selects the search direction and `current_limit` caps
 /// the upper bound used by [`Memblock::phys_alloc`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Memblock<T: PhysAddr, const N: usize, F: RegionFlags = MemblockFlags> {
-    memory: MemblockType<T, N, F>,
-    reserved: MemblockType<T, N, F>,
+pub struct Memblock<T: PhysAddr, const N: usize> {
+    memory: MemblockType<T, N>,
+    reserved: MemblockType<T, N>,
     bottom_up: bool,
     current_limit: T,
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
+impl<T: PhysAddr, const N: usize> MemblockType<T, N> {
     fn move_regions(&mut self, src: usize, dst: usize, count: usize) -> Result<(), Error> {
         if count == 0 || src == dst {
             return Ok(());
@@ -87,7 +109,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
         }
     }
 
-    fn insert_region(&mut self, pos: usize, region: MemblockRegion<T, F>) -> Result<(), Error> {
+    fn insert_region(&mut self, pos: usize, region: MemblockRegion<T>) -> Result<(), Error> {
         if self.cnt >= self.regions.len() {
             return Err(Error::OverCapacity);
         }
@@ -122,7 +144,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
     ///
     /// Returns [`Error::OverCapacity`] if the fixed region array has no room
     /// left.
-    pub fn add(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
+    pub fn add_range(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
         let size = cap_size(base, size);
         if size == PhysAddr::ZERO {
             return Ok(());
@@ -255,7 +277,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
     ///
     /// Returns [`Error::OverCapacity`] if splitting regions would overflow the
     /// fixed region array.
-    pub fn remove(&mut self, base: T, size: T) -> Result<(), Error> {
+    pub fn remove_range(&mut self, base: T, size: T) -> Result<(), Error> {
         let (start_rgn, end_rgn) = self.isolate_range(base, size)?;
         for i in (start_rgn..end_rgn).rev() {
             self.remove_region(i);
@@ -279,7 +301,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
     }
 
     /// Returns the currently stored regions, sorted by `base`.
-    pub fn regions(&self) -> &[MemblockRegion<T, F>] {
+    pub fn regions(&self) -> &[MemblockRegion<T>] {
         &self.regions[..self.cnt]
     }
 
@@ -326,11 +348,11 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
         false
     }
 
-    pub(crate) fn set_flag(
+    pub(crate) fn setclr_flag(
         &mut self,
         base: T,
         size: T,
-        flag: F,
+        flag: MemblockFlags,
         set: bool,
     ) -> Result<(), Error> {
         let (start_rgn, end_rgn) = self.isolate_range(base, size)?;
@@ -348,7 +370,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> MemblockType<T, N, F> {
     }
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
+impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// Creates an empty memblock with no `memory` or `reserved` regions.
     pub const fn new() -> Self {
         Self {
@@ -368,25 +390,37 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     }
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> Default for Memblock<T, N, F> {
+impl<T: PhysAddr, const N: usize> Default for Memblock<T, N> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
-    /// Adds the range `[base, base + size)` to `memory`.
+impl<T: PhysAddr, const N: usize> Memblock<T, N> {
+    /// Adds the range `[base, base + size)` to `memory` with no attributes.
     ///
-    /// See [`MemblockType::add`].
-    pub fn add(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
-        self.memory.add(base, size, flags)
+    /// Mirrors the kernel's `memblock_add`.
+    ///
+    /// See [`MemblockType::add_range`]. Use [`Memblock::add_with_flags`] to
+    /// pass explicit region attributes.
+    pub fn add(&mut self, base: T, size: T) -> Result<(), Error> {
+        self.memory.add_range(base, size, MemblockFlags::NONE)
+    }
+
+    /// Adds the range `[base, base + size)` to `memory` with the given
+    /// attributes.
+    ///
+    /// This is the explicit-flags counterpart of [`Memblock::add`]. See
+    /// [`MemblockType::add_range`].
+    pub fn add_with_flags(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
+        self.memory.add_range(base, size, flags)
     }
 
     /// Removes the range `[base, base + size)` from `memory`.
     ///
-    /// See [`MemblockType::remove`].
+    /// See [`MemblockType::remove_range`].
     pub fn remove(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.memory.remove(base, size)
+        self.memory.remove_range(base, size)
     }
 
     /// Adds the range `[base, base + size)` to `reserved`.
@@ -394,13 +428,13 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Mirrors the kernel's `memblock_reserve`, which records the region
     /// without special attributes.
     pub fn reserve(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.reserved.add(base, size, F::NONE)
+        self.reserved.add_range(base, size, MemblockFlags::NONE)
     }
 
     /// Returns the base address of the first `memory` region, if any.
     ///
     /// Mirrors the kernel's `memblock_start_of_DRAM`.
-    pub fn memory_base(&self) -> Option<T> {
+    pub fn start_of_dram(&self) -> Option<T> {
         if self.memory.cnt > 0 {
             Some(self.memory.regions[0].base())
         } else {
@@ -412,12 +446,11 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// within `[start, end]`.
     ///
     /// The search direction follows [`Memblock::bottom_up`]. Regions are
-    /// filtered by attribute according to [`RegionFlags::should_skip`]; for
-    /// the default [`MemblockFlags`] set, `NOMAP` and `DRIVER_MANAGED`
-    /// regions are skipped unless the corresponding flag is present in
-    /// `flags`, while `MIRROR` and `KHO_SCRATCH` regions are only
-    /// considered when explicitly requested. The range is treated as
-    /// clamped to `[start, end]`.
+    /// filtered by attribute: `NOMAP` and `DRIVER_MANAGED` regions are
+    /// skipped unless the corresponding flag is present in `flags`, while
+    /// `MIRROR` and `KHO_SCRATCH` regions are only considered when
+    /// explicitly requested. The range is treated as clamped to
+    /// `[start, end]`.
     ///
     /// Mirrors the kernel's `memblock_find_in_range_node` (minus the NUMA
     /// node selector). Note that unlike the allocation APIs, the result is
@@ -432,7 +465,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
         align: T,
         start: T,
         end: T,
-        flags: F,
+        flags: MemblockFlags,
     ) -> Option<(T, T)> {
         if self.bottom_up {
             for (r_start, r_end) in self.free_mem_ranges(flags) {
@@ -471,16 +504,14 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// within `[start, end]`, using the empty flag set.
     ///
     /// Mirrors the kernel's `memblock_find_in_range`. Attribute filtering
-    /// still follows [`RegionFlags::should_skip`]; with the default
-    /// [`MemblockFlags`] set, `NOMAP` and `DRIVER_MANAGED` regions are
-    /// skipped. Use [`Memblock::find_in_range_with_flags`] to request specific
-    /// attributes.
+    /// still applies: `NOMAP` and `DRIVER_MANAGED` regions are skipped. Use
+    /// [`Memblock::find_in_range_with_flags`] to request specific attributes.
     ///
     /// # Panics
     ///
     /// Panics if `align` is zero or not a power of two.
     pub fn find_in_range(&self, start: T, end: T, size: T, align: T) -> Option<(T, T)> {
-        self.find_in_range_with_flags(size, align, start, end, F::NONE)
+        self.find_in_range_with_flags(size, align, start, end, MemblockFlags::NONE)
     }
 
     /// Allocates `size` bytes of aligned free memory within `[start, end]`.
@@ -488,8 +519,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// The search direction follows [`Memblock::bottom_up`] and the upper
     /// bound is clamped to [`Memblock::current_limit`], mirroring
     /// `memblock_alloc_internal`. The result is added to `reserved` with
-    /// [`RegionFlags::ALLOC`] (for the default [`MemblockFlags`] set this is
-    /// `RSRV_KERN`).
+    /// [`MemblockFlags::RSRV_KERN`].
     ///
     /// # Errors
     ///
@@ -502,7 +532,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
         align: T,
         start: T,
         end: T,
-        flags: F,
+        flags: MemblockFlags,
     ) -> Result<T, Error> {
         if size == PhysAddr::ZERO {
             return Err(Error::OutOfMemory);
@@ -511,7 +541,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
         let (base, found_end) = self
             .find_in_range_with_flags(size, align, start, limit, flags)
             .ok_or(Error::OutOfMemory)?;
-        self.reserved.add(base, found_end - base, F::ALLOC)?;
+        self.reserved.add_range(base, found_end - base, MemblockFlags::RSRV_KERN)?;
         Ok(base)
     }
 
@@ -521,9 +551,31 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// The search direction follows [`Memblock::bottom_up`] and the upper
     /// bound is clamped to [`Memblock::current_limit`], mirroring the
     /// kernel's `memblock_phys_alloc_range`. The result is added to
-    /// `reserved` with [`RegionFlags::ALLOC`] (for the default
-    /// [`MemblockFlags`] set this is `RSRV_KERN`); the `flags` argument
-    /// only filters which `memory` regions may be allocated from (see
+    /// `reserved` with [`MemblockFlags::RSRV_KERN`].
+    ///
+    /// Allocation applies the attribute filter described on
+    /// [`Memblock::find_in_range_with_flags`]; use
+    /// [`Memblock::phys_alloc_range_with_flags`] to request specific
+    /// attributes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `align` is zero or not a power of two.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OutOfMemory`] if no suitable free region exists, or
+    /// [`Error::OverCapacity`] if the region array is full.
+    pub fn phys_alloc_range(&mut self, size: T, align: T, start: T, end: T) -> Result<T, Error> {
+        self.alloc_internal(size, align, start, end, MemblockFlags::NONE)
+    }
+
+    /// Allocates `size` bytes of free memory aligned to `align` within
+    /// `[start, end]`, filtering memory regions by the given attributes.
+    ///
+    /// This is the explicit-flags counterpart of
+    /// [`Memblock::phys_alloc_range`]. The `flags` argument only filters
+    /// which `memory` regions may be allocated from (see
     /// [`Memblock::find_in_range_with_flags`] for the filtering rules).
     ///
     /// # Panics
@@ -534,13 +586,13 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     ///
     /// Returns [`Error::OutOfMemory`] if no suitable free region exists, or
     /// [`Error::OverCapacity`] if the region array is full.
-    pub fn phys_alloc_range(
+    pub fn phys_alloc_range_with_flags(
         &mut self,
         size: T,
         align: T,
         start: T,
         end: T,
-        flags: F,
+        flags: MemblockFlags,
     ) -> Result<T, Error> {
         self.alloc_internal(size, align, start, end, flags)
     }
@@ -582,10 +634,12 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// [`Memblock::bottom_up`] as the search direction.
     ///
     /// Equivalent to
-    /// [`phys_alloc_range(size, align, T::ZERO, T::MAX, flags)`](Memblock::phys_alloc_range).
-    /// The result is added to `reserved` with [`RegionFlags::ALLOC`] (for
-    /// the default [`MemblockFlags`] set this is `RSRV_KERN`); the `flags`
-    /// argument only filters which `memory` regions may be allocated from.
+    /// [`phys_alloc_range(size, align, T::ZERO, T::MAX)`](Memblock::phys_alloc_range).
+    /// The result is added to `reserved` with [`MemblockFlags::RSRV_KERN`].
+    ///
+    /// Allocation applies the attribute filter described on
+    /// [`Memblock::find_in_range_with_flags`]; use
+    /// [`Memblock::phys_alloc_with_flags`] to request specific attributes.
     ///
     /// Mirrors the kernel's `memblock_phys_alloc`.
     ///
@@ -597,7 +651,31 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     ///
     /// Returns [`Error::OutOfMemory`] if `size` is zero or no suitable free
     /// region exists, or [`Error::OverCapacity`] if the region array is full.
-    pub fn phys_alloc(&mut self, size: T, align: T, flags: F) -> Result<T, Error> {
+    pub fn phys_alloc(&mut self, size: T, align: T) -> Result<T, Error> {
+        self.alloc_internal(size, align, PhysAddr::ZERO, PhysAddr::MAX, MemblockFlags::NONE)
+    }
+
+    /// Allocates `size` bytes of free memory aligned to `align`, filtering
+    /// memory regions by the given attributes.
+    ///
+    /// This is the explicit-flags counterpart of [`Memblock::phys_alloc`].
+    /// The `flags` argument only filters which `memory` regions may be
+    /// allocated from.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `align` is zero or not a power of two.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::OutOfMemory`] if `size` is zero or no suitable free
+    /// region exists, or [`Error::OverCapacity`] if the region array is full.
+    pub fn phys_alloc_with_flags(
+        &mut self,
+        size: T,
+        align: T,
+        flags: MemblockFlags,
+    ) -> Result<T, Error> {
         self.alloc_internal(size, align, PhysAddr::ZERO, PhysAddr::MAX, flags)
     }
 
@@ -613,7 +691,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Returns [`Error::OverCapacity`] if splitting regions would overflow the
     /// region array.
     pub fn phys_free(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.reserved.remove(base, size)
+        self.reserved.remove_range(base, size)
     }
 
     /// Iterates over the free memory ranges, ascending.
@@ -621,22 +699,21 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// A range is free when it belongs to `memory` but not to `reserved`,
     /// i.e. `memory - reserved`. Mirrors the kernel's
     /// `for_each_free_mem_range`. Regions whose attributes are excluded by
-    /// `flags` are skipped according to [`RegionFlags::should_skip`], e.g.
-    /// with the default [`MemblockFlags`] set, pass
-    /// [`MemblockFlags::NOMAP`] to include NOMAP regions.
+    /// `flags` are skipped, e.g. pass [`MemblockFlags::NOMAP`] to include
+    /// NOMAP regions.
     ///
-    /// [`MemblockFlags::NOMAP`]: crate::flags::MemblockFlags::NOMAP
-    pub fn free_mem_ranges(&self, flags: F) -> FreeMemRangeIter<'_, T, F> {
+    /// [`MemblockFlags::NOMAP`]: crate::MemblockFlags::NOMAP
+    pub fn free_mem_ranges(&self, flags: MemblockFlags) -> FreeMemRangeIter<'_, T> {
         FreeMemRangeIter::new(&self.memory, Some(&self.reserved), flags)
     }
 
     /// Returns the reserved region collection.
-    pub fn reserved(&self) -> &MemblockType<T, N, F> {
+    pub fn reserved(&self) -> &MemblockType<T, N> {
         &self.reserved
     }
 
     /// Returns the memory region collection.
-    pub fn memory(&self) -> &MemblockType<T, N, F> {
+    pub fn memory(&self) -> &MemblockType<T, N> {
         &self.memory
     }
 
@@ -657,7 +734,7 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// Returns the end address of the last `memory` region, if any.
     ///
     /// Mirrors the kernel's `memblock_end_of_DRAM`.
-    pub fn memory_end(&self) -> Option<T> {
+    pub fn end_of_dram(&self) -> Option<T> {
         self.memory.regions().last().map(|r| r.end())
     }
 
@@ -698,40 +775,50 @@ impl<T: PhysAddr, const N: usize, F: RegionFlags> Memblock<T, N, F> {
         self.reserved.overlaps_region(base, size)
     }
 
-    /// Sets the given `flags` on the `memory` range `[base, base + size)`.
+    /// Sets all `flags` on the `memory` range `[base, base + size)`.
     ///
-    /// The generic counterpart of the Linux-specific `mark_*` methods: it
-    /// works for any [`RegionFlags`] set.
-    pub fn mark_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
-        self.memory.set_flag(base, size, flags, true)
+    /// Unlike the Linux-specific `mark_*` helpers, this can set multiple
+    /// attributes at once.
+    pub fn mark_flags(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
+        self.memory.setclr_flag(base, size, flags, true)
     }
 
-    /// Clears the given `flags` on the `memory` range `[base, base + size)`.
+    /// Clears all `flags` on the `memory` range `[base, base + size)`.
     ///
-    /// The generic counterpart of the Linux-specific `clear_*` methods: it
-    /// works for any [`RegionFlags`] set.
-    pub fn clear_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
-        self.memory.set_flag(base, size, flags, false)
+    /// Unlike the Linux-specific `clear_*` helpers, this can clear multiple
+    /// attributes at once.
+    pub fn clear_flags(&mut self, base: T, size: T, flags: MemblockFlags) -> Result<(), Error> {
+        self.memory.setclr_flag(base, size, flags, false)
     }
 
-    /// Sets the given `flags` on the `reserved` range `[base, base + size)`.
+    /// Sets all `flags` on the `reserved` range `[base, base + size)`.
     ///
-    /// The generic counterpart of the Linux-specific `reserved_mark_*`
-    /// methods: it works for any [`RegionFlags`] set.
-    pub fn reserved_mark_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
-        self.reserved.set_flag(base, size, flags, true)
+    /// Unlike the Linux-specific `reserved_mark_*` helpers, this can set
+    /// multiple attributes at once.
+    pub fn reserved_mark_flags(
+        &mut self,
+        base: T,
+        size: T,
+        flags: MemblockFlags,
+    ) -> Result<(), Error> {
+        self.reserved.setclr_flag(base, size, flags, true)
     }
 
-    /// Clears the given `flags` on the `reserved` range `[base, base + size)`.
+    /// Clears all `flags` on the `reserved` range `[base, base + size)`.
     ///
-    /// The generic counterpart of the Linux-specific `reserved_clear_*`
-    /// methods: it works for any [`RegionFlags`] set.
-    pub fn reserved_clear_flags(&mut self, base: T, size: T, flags: F) -> Result<(), Error> {
-        self.reserved.set_flag(base, size, flags, false)
+    /// Unlike the Linux-specific `reserved_clear_*` helpers, this can clear
+    /// multiple attributes at once.
+    pub fn reserved_clear_flags(
+        &mut self,
+        base: T,
+        size: T,
+        flags: MemblockFlags,
+    ) -> Result<(), Error> {
+        self.reserved.setclr_flag(base, size, flags, false)
     }
 }
 
-impl<T: PageFrame, const N: usize, F: RegionFlags> Memblock<T, N, F> {
+impl<T: PageFrame, const N: usize> Memblock<T, N> {
     /// Iterates over the `memory` regions as page frame number (PFN) ranges
     /// `[start_pfn, end_pfn)`.
     ///
@@ -745,13 +832,13 @@ impl<T: PageFrame, const N: usize, F: RegionFlags> Memblock<T, N, F> {
     /// # Panics
     ///
     /// Panics if `page_size` is zero.
-    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T, F> {
+    pub fn mem_pfn_ranges(&self, page_size: T) -> PfnRangeIter<'_, T> {
         assert!(page_size != T::ZERO, "page_size must be non-zero");
         PfnRangeIter::new(&self.memory, page_size)
     }
 }
 
-impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
+impl<T: PhysAddr, const N: usize> Memblock<T, N> {
     /// Adds the range `[base, base + size)` to `reserved` and marks it
     /// reserved for kernel use.
     ///
@@ -759,7 +846,8 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// use this internally so that every memblock allocation carries
     /// [`MemblockFlags::RSRV_KERN`].
     pub fn reserve_kern(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.reserved.add(base, size, MemblockFlags::RSRV_KERN)
+        self.reserved
+            .add_range(base, size, MemblockFlags::RSRV_KERN)
     }
 
     /// Marks the `memory` range `[base, base + size)` as hotpluggable.
@@ -767,7 +855,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_mark_hotplug`.
     pub fn mark_hotplug(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::HOTPLUG, true)
+            .setclr_flag(base, size, MemblockFlags::HOTPLUG, true)
     }
 
     /// Clears the hotpluggable attribute on the `memory` range
@@ -776,7 +864,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_clear_hotplug`.
     pub fn clear_hotplug(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::HOTPLUG, false)
+            .setclr_flag(base, size, MemblockFlags::HOTPLUG, false)
     }
 
     /// Marks the `memory` range `[base, base + size)` as mirrored.
@@ -784,7 +872,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_mark_mirror`.
     pub fn mark_mirror(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::MIRROR, true)
+            .setclr_flag(base, size, MemblockFlags::MIRROR, true)
     }
 
     /// Clears the mirrored attribute on the `memory` range
@@ -793,7 +881,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_clear_mirror`.
     pub fn clear_mirror(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::MIRROR, false)
+            .setclr_flag(base, size, MemblockFlags::MIRROR, false)
     }
 
     /// Marks the `memory` range `[base, base + size)` as not mapped into the
@@ -801,7 +889,8 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     ///
     /// Mirrors the kernel's `memblock_mark_nomap`.
     pub fn mark_nomap(&mut self, base: T, size: T) -> Result<(), Error> {
-        self.memory.set_flag(base, size, MemblockFlags::NOMAP, true)
+        self.memory
+            .setclr_flag(base, size, MemblockFlags::NOMAP, true)
     }
 
     /// Clears the NOMAP attribute on the `memory` range `[base, base + size)`.
@@ -809,7 +898,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_clear_nomap`.
     pub fn clear_nomap(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::NOMAP, false)
+            .setclr_flag(base, size, MemblockFlags::NOMAP, false)
     }
 
     /// Marks the `memory` range `[base, base + size)` as scratch memory for
@@ -818,7 +907,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_mark_kho_scratch`.
     pub fn mark_kho_scratch(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::KHO_SCRATCH, true)
+            .setclr_flag(base, size, MemblockFlags::KHO_SCRATCH, true)
     }
 
     /// Clears the KHO scratch attribute on the `memory` range
@@ -827,7 +916,7 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_clear_kho_scratch`.
     pub fn clear_kho_scratch(&mut self, base: T, size: T) -> Result<(), Error> {
         self.memory
-            .set_flag(base, size, MemblockFlags::KHO_SCRATCH, false)
+            .setclr_flag(base, size, MemblockFlags::KHO_SCRATCH, false)
     }
 
     /// Marks the `reserved` range `[base, base + size)` so that its struct
@@ -836,14 +925,14 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_reserved_mark_noinit`.
     pub fn reserved_mark_noinit(&mut self, base: T, size: T) -> Result<(), Error> {
         self.reserved
-            .set_flag(base, size, MemblockFlags::RSRV_NOINIT, true)
+            .setclr_flag(base, size, MemblockFlags::RSRV_NOINIT, true)
     }
 
     /// Clears the no-init attribute on the `reserved` range
     /// `[base, base + size)`.
     pub fn reserved_clear_noinit(&mut self, base: T, size: T) -> Result<(), Error> {
         self.reserved
-            .set_flag(base, size, MemblockFlags::RSRV_NOINIT, false)
+            .setclr_flag(base, size, MemblockFlags::RSRV_NOINIT, false)
     }
 
     /// Marks the `reserved` range `[base, base + size)` as reserved for kernel
@@ -852,30 +941,45 @@ impl<T: PhysAddr, const N: usize> Memblock<T, N, MemblockFlags> {
     /// Mirrors the kernel's `memblock_reserved_mark_kern`.
     pub fn reserved_mark_kern(&mut self, base: T, size: T) -> Result<(), Error> {
         self.reserved
-            .set_flag(base, size, MemblockFlags::RSRV_KERN, true)
+            .setclr_flag(base, size, MemblockFlags::RSRV_KERN, true)
     }
 
     /// Clears the kernel-use attribute on the `reserved` range
     /// `[base, base + size)`.
     pub fn reserved_clear_kern(&mut self, base: T, size: T) -> Result<(), Error> {
         self.reserved
-            .set_flag(base, size, MemblockFlags::RSRV_KERN, false)
+            .setclr_flag(base, size, MemblockFlags::RSRV_KERN, false)
     }
 }
 
 /// Returns `true` if a `memory` region's attributes are excluded by `flags`.
 ///
-/// Delegates to [`RegionFlags::should_skip`]. For the default
-/// [`MemblockFlags`] set this mirrors the kernel's `should_skip_region`
-/// applied to `memblock.memory`: `NOMAP` and `DRIVER_MANAGED` regions are
-/// skipped unless the corresponding flag is present in `flags`, while
-/// `MIRROR` and `KHO_SCRATCH` regions are only iterated when explicitly
-/// requested.
-pub(crate) fn should_skip_region<T: PhysAddr, F: RegionFlags>(
-    r: MemblockRegion<T, F>,
-    flags: F,
+/// Mirrors the kernel's `should_skip_region` applied to `memblock.memory`:
+/// `NOMAP` and `DRIVER_MANAGED` regions are skipped unless the corresponding
+/// flag is present in `flags`, while `MIRROR` and `KHO_SCRATCH` regions are
+/// only iterated when explicitly requested.
+pub(crate) fn should_skip_region<T: PhysAddr>(
+    r: MemblockRegion<T>,
+    requested: MemblockFlags,
 ) -> bool {
-    F::should_skip(r.flags(), flags)
+    let region = r.flags();
+    if !requested.contains(MemblockFlags::NOMAP) && region.contains(MemblockFlags::NOMAP) {
+        return true;
+    }
+    if !requested.contains(MemblockFlags::DRIVER_MANAGED)
+        && region.contains(MemblockFlags::DRIVER_MANAGED)
+    {
+        return true;
+    }
+    if requested.contains(MemblockFlags::MIRROR) && !region.contains(MemblockFlags::MIRROR) {
+        return true;
+    }
+    if requested.contains(MemblockFlags::KHO_SCRATCH)
+        && !region.contains(MemblockFlags::KHO_SCRATCH)
+    {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -915,8 +1019,8 @@ mod tests {
     #[test]
     fn add_merges_adjacent_same_flags() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x200, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0x100).unwrap();
+        mb.add(0x200, 0x100).unwrap();
         assert_regions(&mb, &[(0x100, 0x200, 0)]);
         assert_eq!(mb.phys_mem_size(), 0x200);
     }
@@ -924,8 +1028,8 @@ mod tests {
     #[test]
     fn add_does_not_merge_different_flags() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x100, 0x100, MemblockFlags::NOMAP).unwrap();
+        mb.add(0x0, 0x100).unwrap();
+        mb.add_with_flags(0x100, 0x100, MemblockFlags::NOMAP).unwrap();
         assert_regions(
             &mb,
             &[(0x0, 0x100, 0), (0x100, 0x100, MemblockFlags::NOMAP.bits())],
@@ -935,33 +1039,33 @@ mod tests {
     #[test]
     fn add_gap_before_existing() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x50, 0x50, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0x100).unwrap();
+        mb.add(0x50, 0x50).unwrap();
         assert_regions(&mb, &[(0x50, 0x50, 0), (0x100, 0x100, 0)]);
     }
 
     #[test]
     fn add_gap_after_existing() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x300, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0x100).unwrap();
+        mb.add(0x300, 0x100).unwrap();
         assert_regions(&mb, &[(0x100, 0x100, 0), (0x300, 0x100, 0)]);
     }
 
     #[test]
     fn add_three_way_merge() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x300, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x200, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0x100).unwrap();
+        mb.add(0x300, 0x100).unwrap();
+        mb.add(0x200, 0x100).unwrap();
         assert_regions(&mb, &[(0x100, 0x300, 0)]);
     }
 
     #[test]
     fn add_wraps_existing_region() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NOMAP).unwrap();
-        mb.add(0x0, 0x300, MemblockFlags::NONE).unwrap();
+        mb.add_with_flags(0x100, 0x100, MemblockFlags::NOMAP).unwrap();
+        mb.add(0x0, 0x300).unwrap();
         assert_regions(
             &mb,
             &[
@@ -975,8 +1079,8 @@ mod tests {
     #[test]
     fn add_exact_overlap_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0x100).unwrap();
+        mb.add(0x100, 0x100).unwrap();
         assert_regions(&mb, &[(0x100, 0x100, 0)]);
         assert_eq!(mb.phys_mem_size(), 0x100);
     }
@@ -984,7 +1088,7 @@ mod tests {
     #[test]
     fn add_zero_size_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x100, 0, MemblockFlags::NONE).unwrap();
+        mb.add(0x100, 0).unwrap();
         assert!(mb.memory.is_empty());
     }
 
@@ -992,7 +1096,7 @@ mod tests {
     fn add_caps_size_at_address_space_end() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xf;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
         assert_regions(&mb, &[(top, 0xf, 0)]);
         assert_eq!(mb.memory.regions()[0].end(), usize::MAX);
         assert_eq!(mb.phys_mem_size(), 0xf);
@@ -1002,19 +1106,19 @@ mod tests {
     fn add_near_max_then_adjacent_merge() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xff;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
         assert_regions(&mb, &[(top, 0xff, 0)]);
         // A re-add that is fully contained is a no-op.
-        mb.add(top, 0x200, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x200).unwrap();
         assert_regions(&mb, &[(top, 0xff, 0)]);
     }
 
     #[test]
     fn add_full_array_no_new_regions_is_noop() {
         let mut mb = Memblock::<usize, 2>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x1040, 0x10, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
+        mb.add(0x1040, 0x10).unwrap();
         assert_eq!(mb.memory.count(), 2);
         assert_eq!(mb.memory.regions()[0].size(), 0x100);
     }
@@ -1022,19 +1126,19 @@ mod tests {
     #[test]
     fn add_full_array_adjacent_extends_last_region() {
         let mut mb = Memblock::<usize, 2>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
         // A fully occupied array cannot provide the transient slot the
         // two-pass insertion needs before merging.
         assert!(matches!(
-            mb.add(0x2100, 0x100, MemblockFlags::NONE),
+            mb.add(0x2100, 0x100),
             Err(Error::OverCapacity)
         ));
 
         let mut mb = Memblock::<usize, 3>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
+        mb.add(0x2100, 0x100).unwrap();
         assert_eq!(mb.memory.count(), 2);
         assert_eq!(mb.memory.regions()[1], MemblockRegion::new(0x2000, 0x200));
         assert_eq!(mb.phys_mem_size(), 0x300);
@@ -1043,10 +1147,10 @@ mod tests {
     #[test]
     fn add_full_array_needing_new_region_fails() {
         let mut mb = Memblock::<usize, 2>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
         assert!(matches!(
-            mb.add(0x3000, 0x100, MemblockFlags::NONE),
+            mb.add(0x3000, 0x100),
             Err(Error::OverCapacity)
         ));
     }
@@ -1054,7 +1158,7 @@ mod tests {
     #[test]
     fn remove_middle_split() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x1000).unwrap();
         mb.remove(0x400, 0x200).unwrap();
         assert_regions(&mb, &[(0x0, 0x400, 0), (0x600, 0xa00, 0)]);
     }
@@ -1062,8 +1166,8 @@ mod tests {
     #[test]
     fn remove_across_regions() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x200, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
+        mb.add(0x200, 0x100).unwrap();
         mb.remove(0x50, 0x200).unwrap();
         assert_regions(&mb, &[(0x0, 0x50, 0), (0x250, 0xb0, 0)]);
     }
@@ -1071,7 +1175,7 @@ mod tests {
     #[test]
     fn remove_absent_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.remove(0x0, 0x100).unwrap();
         assert_regions(&mb, &[(0x1000, 0x100, 0)]);
         mb.remove(0x1200, 0x100).unwrap();
@@ -1081,7 +1185,7 @@ mod tests {
     #[test]
     fn remove_zero_size_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.remove(0x1000, 0).unwrap();
         assert_regions(&mb, &[(0x1000, 0x100, 0)]);
     }
@@ -1089,7 +1193,7 @@ mod tests {
     #[test]
     fn remove_whole_region_empties_type() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.remove(0x1000, 0x100).unwrap();
         assert!(mb.memory.is_empty());
         assert_eq!(mb.phys_mem_size(), 0);
@@ -1098,7 +1202,7 @@ mod tests {
     #[test]
     fn remove_partial_left_edge() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         // The removal range extends below memory; only the overlapping part
         // is removed.
         mb.remove(0x800, 0x1000).unwrap();
@@ -1108,7 +1212,7 @@ mod tests {
     #[test]
     fn remove_partial_right_edge() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         // The removal range extends above memory.
         mb.remove(0x1800, 0x1000).unwrap();
         assert_regions(&mb, &[(0x1000, 0x800, 0)]);
@@ -1117,7 +1221,7 @@ mod tests {
     #[test]
     fn remove_adjacent_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         // Adjacent ranges do not overlap and are therefore not removed.
         mb.remove(0x800, 0x800).unwrap();
         mb.remove(0x2000, 0x800).unwrap();
@@ -1128,7 +1232,7 @@ mod tests {
     fn remove_caps_size_at_address_space_end() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xff;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
         mb.remove(usize::MAX - 0xf, 0x100).unwrap();
         assert_eq!(mb.memory.regions()[0].size(), 0xf0);
     }
@@ -1136,7 +1240,7 @@ mod tests {
     #[test]
     fn total_size_after_add_remove() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         assert_eq!(mb.phys_mem_size(), 0x1000);
         mb.remove(0x1400, 0x200).unwrap();
         assert_eq!(mb.phys_mem_size(), 0xe00);
@@ -1145,8 +1249,8 @@ mod tests {
     #[test]
     fn search_finds_and_misses() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x200, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x200).unwrap();
         assert_eq!(mb.memory.search(0x1000), Some(0));
         assert_eq!(mb.memory.search(0x10ff), Some(0));
         assert_eq!(mb.memory.search(0x2000), Some(1));
@@ -1160,8 +1264,8 @@ mod tests {
     #[test]
     fn overlaps_region_semantics() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x200, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x200).unwrap();
         assert!(mb.memory.overlaps_region(0x1000, 0x100));
         assert!(mb.memory.overlaps_region(0x1000, 0x1000));
         assert!(mb.memory.overlaps_region(0x1050, 0x1000));
@@ -1177,8 +1281,8 @@ mod tests {
     #[test]
     fn alloc_reserves_top_down() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x1f00);
         assert_eq!(mb.reserved.count(), 1);
         assert_eq!(mb.reserved.regions()[0].base(), 0x1f00);
@@ -1189,14 +1293,14 @@ mod tests {
                 .contains(MemblockFlags::RSRV_KERN)
         );
         assert_eq!(mb.reserved_size(), 0x100);
-        assert_eq!(mb.memory_base(), Some(0x1000));
+        assert_eq!(mb.start_of_dram(), Some(0x1000));
     }
 
     #[test]
     fn alloc_free_roundtrip() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x1f00);
         mb.phys_free(p, 0x100).unwrap();
         assert!(mb.reserved.is_empty());
@@ -1206,19 +1310,19 @@ mod tests {
     #[test]
     fn alloc_then_free_then_realloc_same_address() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p1 = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        let p1 = mb.phys_alloc(0x100, 0x100).unwrap();
         mb.phys_free(p1, 0x100).unwrap();
-        let p2 = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        let p2 = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p1, p2);
     }
 
     #[test]
     fn alloc_zero_size_fails() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         assert!(matches!(
-            mb.phys_alloc(0, 0x100, MemblockFlags::NONE),
+            mb.phys_alloc(0, 0x100),
             Err(Error::OutOfMemory)
         ));
     }
@@ -1226,29 +1330,29 @@ mod tests {
     #[test]
     fn alloc_top_down_prefers_high_memory() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        mb.add(0x4000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        mb.add(0x4000, 0x1000).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x4f00);
     }
 
     #[test]
     fn alloc_follows_bottom_up() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_bottom_up(true);
         assert!(mb.bottom_up());
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x1000);
     }
 
     #[test]
     fn alloc_respects_current_limit() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_current_limit(0x1500);
         assert_eq!(mb.current_limit(), 0x1500);
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x1400);
     }
 
@@ -1256,9 +1360,9 @@ mod tests {
     fn alloc_near_max_bottom_up() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0x1ff;
-        mb.add(top, 0x200, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x200).unwrap();
         mb.set_bottom_up(true);
-        let p = mb.phys_alloc(0x80, 0x100, MemblockFlags::NONE).unwrap();
+        let p = mb.phys_alloc(0x80, 0x100).unwrap();
         assert_eq!(p, top);
     }
 
@@ -1266,17 +1370,17 @@ mod tests {
     fn alloc_top_down_near_max() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xff;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
-        let p = mb.phys_alloc(0x40, 0x40, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
+        let p = mb.phys_alloc(0x40, 0x40).unwrap();
         assert_eq!(p, usize::MAX - 0x7f);
     }
 
     #[test]
     fn alloc_out_of_memory() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         assert!(matches!(
-            mb.phys_alloc_range(0x1000, 0x100, 0, usize::MAX, MemblockFlags::NONE),
+            mb.phys_alloc_range(0x1000, 0x100, 0, usize::MAX),
             Err(Error::OutOfMemory)
         ));
     }
@@ -1284,11 +1388,11 @@ mod tests {
     #[test]
     fn alloc_exhausts_memory_region() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        let p = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        let p = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p, 0x1000);
         assert!(matches!(
-            mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE),
+            mb.phys_alloc(0x100, 0x100),
             Err(Error::OutOfMemory)
         ));
     }
@@ -1296,10 +1400,10 @@ mod tests {
     #[test]
     fn alloc_skips_nomap_by_default() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
-        mb.add(0x2000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
+        mb.add(0x2000, 0x1000).unwrap();
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x2f00);
     }
@@ -1307,13 +1411,13 @@ mod tests {
     #[test]
     fn alloc_from_nomap_when_requested() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
+        mb.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NOMAP)
+            .phys_alloc_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NOMAP)
             .unwrap();
         assert_eq!(p, 0x1f00);
         assert!(matches!(
-            mb.phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE),
+            mb.phys_alloc_range(0x100, 0x100, 0, usize::MAX),
             Err(Error::OutOfMemory)
         ));
     }
@@ -1321,11 +1425,11 @@ mod tests {
     #[test]
     fn alloc_skips_driver_managed_by_default() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::DRIVER_MANAGED)
+        mb.add_with_flags(0x1000, 0x1000, MemblockFlags::DRIVER_MANAGED)
             .unwrap();
-        mb.add(0x2000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x2000, 0x1000).unwrap();
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x2f00);
     }
@@ -1333,9 +1437,9 @@ mod tests {
     #[test]
     fn alloc_respects_explicit_range() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, 0x1500, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, 0x1500)
             .unwrap();
         assert_eq!(p, 0x1400);
     }
@@ -1343,10 +1447,10 @@ mod tests {
     #[test]
     fn alloc_range_bottom_up_follows_low_memory() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_bottom_up(true);
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x1000);
     }
@@ -1354,10 +1458,10 @@ mod tests {
     #[test]
     fn alloc_respects_start_bound_bottom_up() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_bottom_up(true);
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0x1500, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0x1500, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x1500);
     }
@@ -1365,10 +1469,10 @@ mod tests {
     #[test]
     fn alloc_respects_current_limit_overriding_end() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_current_limit(0x1500);
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x1400);
     }
@@ -1376,16 +1480,16 @@ mod tests {
     #[test]
     fn alloc_zero_align_defaults_to_no_alignment() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1001, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1001, 0x1000).unwrap();
         mb.set_bottom_up(true);
-        let p = mb.phys_alloc(0x100, 1, MemblockFlags::NONE).unwrap();
+        let p = mb.phys_alloc(0x100, 1).unwrap();
         assert_eq!(p, 0x1001);
     }
 
     #[test]
     fn find_in_range_does_not_reserve() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         let (base, end) = mb.find_in_range(0, usize::MAX, 0x100, 0x100).unwrap();
         assert_eq!((base, end), (0x1f00, 0x2000));
         assert!(mb.reserved.is_empty());
@@ -1394,7 +1498,7 @@ mod tests {
     #[test]
     fn find_in_range_with_flags_honors_flags() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
+        mb.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
         assert!(
             mb.find_in_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
                 .is_none()
@@ -1408,7 +1512,7 @@ mod tests {
     #[test]
     fn find_in_range_with_flags_bottom_up() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.set_bottom_up(true);
         let (base, _) = mb
             .find_in_range_with_flags(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
@@ -1419,7 +1523,7 @@ mod tests {
     #[test]
     fn find_in_range_respects_bounds() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         let (base, _) = mb.find_in_range(0x100, 0x1500, 0x100, 0x100).unwrap();
         assert_eq!(base, 0x1400);
     }
@@ -1427,15 +1531,15 @@ mod tests {
     #[test]
     fn find_in_range_out_of_bounds_is_none() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         assert!(mb.find_in_range(0x5000, 0x6000, 0x100, 0x100).is_none());
     }
 
     #[test]
     fn free_mem_ranges_subtracts_reserved() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        mb.add(0x4000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        mb.add(0x4000, 0x1000).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
 
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
@@ -1448,8 +1552,8 @@ mod tests {
     #[test]
     fn free_mem_ranges_with_empty_reserved_yields_all_memory() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
         assert_eq!(free, vec![(0x1000, 0x1100), (0x2000, 0x2100)]);
     }
@@ -1457,7 +1561,7 @@ mod tests {
     #[test]
     fn free_mem_ranges_empty_when_fully_reserved() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x1000, 0x1000).unwrap();
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
         assert!(free.is_empty());
@@ -1466,8 +1570,8 @@ mod tests {
     #[test]
     fn free_mem_ranges_skips_nomap_by_default() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NOMAP).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add_with_flags(0x1000, 0x100, MemblockFlags::NOMAP).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
         assert_eq!(free, vec![(0x2000, 0x2100)]);
 
@@ -1478,8 +1582,8 @@ mod tests {
     #[test]
     fn free_mem_ranges_rev_order() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x100).unwrap();
         let mut it = mb.free_mem_ranges(MemblockFlags::NONE).rev();
         assert_eq!(it.next(), Some((0x2000, 0x2100)));
         assert_eq!(it.next(), Some((0x1000, 0x1100)));
@@ -1491,7 +1595,7 @@ mod tests {
         // Two reserved regions sharing a boundary (differing flags prevent
         // merging) must not make the iterator skip the following free range.
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
         mb.reserve_kern(0x1900, 0x100).unwrap();
         mb.reserve(0x1d00, 0x100).unwrap();
@@ -1512,7 +1616,7 @@ mod tests {
     #[test]
     fn free_mem_ranges_is_double_ended() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
 
         // Interleaved consumption from both ends must partition the pieces.
@@ -1531,7 +1635,7 @@ mod tests {
     #[test]
     fn free_mem_ranges_both_ends_meet_inside_one_region() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x3000, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x3000).unwrap();
         mb.reserve(0x100, 0x100).unwrap();
         mb.reserve(0x500, 0x100).unwrap();
         // Free pieces: [0x0,0x100), [0x200,0x500), [0x600,0x3000).
@@ -1555,7 +1659,7 @@ mod tests {
     fn free_mem_ranges_near_max_saturates() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xff;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
         assert_eq!(free, vec![(top, usize::MAX)]);
     }
@@ -1565,7 +1669,7 @@ mod tests {
         let mut mb = Memblock::<usize, 8>::new();
         // Reserved extends below memory on the left and above it on the
         // right; only the middle stays free.
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x800, 0x1000).unwrap();
         mb.reserve(0x1c00, 0x1000).unwrap();
         let free: Vec<_> = mb.free_mem_ranges(MemblockFlags::NONE).collect();
@@ -1575,8 +1679,8 @@ mod tests {
     #[test]
     fn mem_pfn_ranges_basic() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        mb.add(0x4000, 0x2000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
+        mb.add(0x4000, 0x2000).unwrap();
         let pfns: Vec<_> = mb.mem_pfn_ranges(0x1000).collect();
         assert_eq!(pfns, vec![(1, 2), (4, 6)]);
     }
@@ -1584,8 +1688,8 @@ mod tests {
     #[test]
     fn mem_pfn_ranges_skips_partial_pages() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x800, 0x2000, MemblockFlags::NONE).unwrap();
-        mb.add(0x4000, 0x800, MemblockFlags::NONE).unwrap();
+        mb.add(0x800, 0x2000).unwrap();
+        mb.add(0x4000, 0x800).unwrap();
         let pfns: Vec<_> = mb.mem_pfn_ranges(0x1000).collect();
         assert_eq!(pfns, vec![(1, 2)]);
     }
@@ -1606,14 +1710,14 @@ mod tests {
     #[test]
     fn queries() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
-        mb.add(0x2000, 0x200, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
+        mb.add(0x2000, 0x200).unwrap();
         mb.reserve(0x1050, 0x20).unwrap();
 
         assert_eq!(mb.phys_mem_size(), 0x300);
         assert_eq!(mb.reserved_size(), 0x20);
-        assert_eq!(mb.memory_base(), Some(0x1000));
-        assert_eq!(mb.memory_end(), Some(0x2200));
+        assert_eq!(mb.start_of_dram(), Some(0x1000));
+        assert_eq!(mb.end_of_dram(), Some(0x2200));
         assert_eq!(mb.region_size(0x1000), 0x100);
         assert_eq!(mb.region_size(0x2100), 0x200);
         assert_eq!(mb.region_size(0x500), 0);
@@ -1644,22 +1748,22 @@ mod tests {
     fn is_region_memory_handles_max_range() {
         let mut mb = Memblock::<usize, 8>::new();
         let top = usize::MAX - 0xff;
-        mb.add(top, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(top, 0x100).unwrap();
         assert!(mb.is_region_memory(top, 0x100));
         assert!(!mb.is_region_memory(top - 0x10, 0x101));
     }
 
     #[test]
-    fn memory_base_end_empty() {
+    fn start_and_end_of_dram_empty() {
         let mb = Memblock::<usize, 8>::new();
-        assert_eq!(mb.memory_base(), None);
-        assert_eq!(mb.memory_end(), None);
+        assert_eq!(mb.start_of_dram(), None);
+        assert_eq!(mb.end_of_dram(), None);
     }
 
     #[test]
     fn reserve_kern_sets_flag() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.reserve_kern(0x1000, 0x40).unwrap();
         assert!(
             mb.reserved.regions()[0]
@@ -1671,7 +1775,7 @@ mod tests {
     #[test]
     fn reserve_does_not_set_kern_flag() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.reserve(0x1000, 0x40).unwrap();
         assert!(
             !mb.reserved.regions()[0]
@@ -1683,7 +1787,7 @@ mod tests {
     #[test]
     fn mark_and_clear_nomap() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
         mb.mark_nomap(0x40, 0x80).unwrap();
         assert_regions(
             &mb,
@@ -1700,7 +1804,7 @@ mod tests {
     #[test]
     fn mark_flags_preserved_across_remove() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
         mb.mark_nomap(0x40, 0x80).unwrap();
         mb.remove(0x20, 0x10).unwrap();
         assert_regions(
@@ -1717,7 +1821,7 @@ mod tests {
     #[test]
     fn mark_and_clear_hotplug() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
         mb.mark_hotplug(0x40, 0x80).unwrap();
         assert_eq!(mb.memory.regions()[1].flags(), MemblockFlags::HOTPLUG);
         mb.clear_hotplug(0x40, 0x80).unwrap();
@@ -1727,7 +1831,7 @@ mod tests {
     #[test]
     fn mark_and_clear_mirror() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
         mb.mark_mirror(0x40, 0x80).unwrap();
         assert_eq!(mb.memory.regions()[1].flags(), MemblockFlags::MIRROR);
         mb.clear_mirror(0x40, 0x80).unwrap();
@@ -1737,7 +1841,7 @@ mod tests {
     #[test]
     fn mark_and_clear_kho_scratch() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x0, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x0, 0x100).unwrap();
         mb.mark_kho_scratch(0x40, 0x80).unwrap();
         assert_eq!(mb.memory.regions()[1].flags(), MemblockFlags::KHO_SCRATCH);
         mb.clear_kho_scratch(0x40, 0x80).unwrap();
@@ -1773,9 +1877,9 @@ mod tests {
     }
 
     #[test]
-    fn set_flag_on_absent_range_is_noop() {
+    fn setclr_flag_on_absent_range_is_noop() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x100).unwrap();
         mb.mark_nomap(0x5000, 0x100).unwrap();
         assert_eq!(mb.memory.count(), 1);
         assert_eq!(mb.memory.regions()[0].flags(), MemblockFlags::NONE);
@@ -1823,9 +1927,9 @@ mod tests {
         // Requesting no flags does not skip MIRROR regions, mirroring the
         // kernel's `should_skip_region` for the default allocation flags.
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::MIRROR).unwrap();
+        mb.add_with_flags(0x1000, 0x1000, MemblockFlags::MIRROR).unwrap();
         let p = mb
-            .phys_alloc_range(0x100, 0x100, 0, usize::MAX, MemblockFlags::NONE)
+            .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
             .unwrap();
         assert_eq!(p, 0x1f00);
     }
@@ -1833,7 +1937,7 @@ mod tests {
     #[test]
     fn phys_free_removes_from_reserved() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
         assert!(mb.is_reserved(0x1850));
         mb.phys_free(0x1800, 0x100).unwrap();
@@ -1844,9 +1948,9 @@ mod tests {
     #[test]
     fn multiple_allocations_track_reserved() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x3000, MemblockFlags::NONE).unwrap();
-        let p1 = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
-        let p2 = mb.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x3000).unwrap();
+        let p1 = mb.phys_alloc(0x100, 0x100).unwrap();
+        let p2 = mb.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p1, 0x3f00);
         assert_eq!(p2, 0x3e00);
         assert_eq!(mb.reserved_size(), 0x200);
@@ -1860,7 +1964,7 @@ mod tests {
     #[test]
     fn reserve_existing_allocated_region_is_noop_for_size() {
         let mut mb = Memblock::<usize, 8>::new();
-        mb.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
+        mb.add(0x1000, 0x1000).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
         mb.reserve(0x1800, 0x100).unwrap();
         assert_eq!(mb.reserved_size(), 0x100);
@@ -1870,13 +1974,13 @@ mod tests {
     #[test]
     fn generic_over_multiple_address_widths() {
         let mut mb32 = Memblock::<u32, 4>::new();
-        mb32.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p32 = mb32.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb32.add(0x1000, 0x1000).unwrap();
+        let p32 = mb32.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p32, 0x1f00);
 
         let mut mb64 = Memblock::<u64, 4>::new();
-        mb64.add(0x1000, 0x1000, MemblockFlags::NONE).unwrap();
-        let p64 = mb64.phys_alloc(0x100, 0x100, MemblockFlags::NONE).unwrap();
+        mb64.add(0x1000, 0x1000).unwrap();
+        let p64 = mb64.phys_alloc(0x100, 0x100).unwrap();
         assert_eq!(p64, 0x1f00);
     }
 }

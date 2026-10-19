@@ -6,11 +6,33 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Flattened the module layout.** `Error`, `Memblock`, `MemblockType`,
+  `MemblockRegion`, `MemblockFlags` and the range iterators are now exported
+  only from the crate root, and the implementation modules are private. The
+  `addr`, `error` and `flags` modules were removed; `PhysAddr` remains
+  available as `the_memblock::PhysAddr`.
+- **Aligned `add` and allocation signatures with the kernel.** `Memblock::add`,
+  `Memblock::phys_alloc` and `Memblock::phys_alloc_range` no longer take a
+  `flags` parameter, matching `memblock_add`, `memblock_phys_alloc` and
+  `memblock_phys_alloc_range`. They use `MemblockFlags::NONE`. The explicit
+  attribute variants are `add_with_flags`, `phys_alloc_with_flags` and
+  `phys_alloc_range_with_flags`.
+- **Renamed the DRAM boundary accessors.** `Memblock::memory_base` and
+  `Memblock::memory_end` are now `start_of_dram` and `end_of_dram`, matching
+  the kernel's `memblock_start_of_DRAM` and `memblock_end_of_DRAM`. The
+  return type remains `Option<T>`, so an empty memblock is still
+  representable.
+- **Renamed the `MemblockType` range operations.** `MemblockType::add` and
+  `MemblockType::remove` are now `add_range` and `remove_range`, matching
+  `memblock_add_range` and `memblock_remove_range`. `Memblock::add` and
+  `Memblock::remove` keep their names because they mirror `memblock_add` and
+  `memblock_remove`.
+- The crate-private flag helper `MemblockType::set_flag` was renamed to
+  `setclr_flag` to mirror the kernel's `memblock_setclr_flag`.
 - **The address traits moved to `the-mm-core`.** `PhysAddr` and its
   overflow-safe arithmetic helpers (`saturating_add`, `cap_size`) now live in
-  the shared `the-mm-core` crate. `the_memblock::addr::PhysAddr` is a
-  re-export, so existing code and `#[derive(PhysAddr)]` keep working
-  unchanged.
+  the shared `the-mm-core` crate. `the_memblock::PhysAddr` is a re-export,
+  so existing code and `#[derive(PhysAddr)]` keep working unchanged.
 - **PFN conversions moved to `PageFrame`.** `pfn_up`/`pfn_down`/
   `pfn_to_phys` are no longer part of `PhysAddr`: `PageFrame` now provides
   `phys_to_pfn` (floor), `pfn_to_phys` and `pfn_ceil` (exact ceil).
@@ -19,24 +41,29 @@ All notable changes to this project are documented in this file.
   `T: PageFrame`; all other memblock APIs still need only `PhysAddr`.
   `the-memblock` re-exports `PageFrame` for convenience.
 - **Iterator types no longer expose the region capacity.** `FreeMemRangeIter`
-  and `PfnRangeIter` are now `FreeMemRangeIter<'a, T, F>` and
-  `PfnRangeIter<'a, T, F>`; they borrow region slices instead of
-  `MemblockType<T, N, F>`. The constructors remain crate-internal.
+  and `PfnRangeIter` are now `FreeMemRangeIter<'a, T>` and
+  `PfnRangeIter<'a, T>`; they borrow region slices instead of
+  `MemblockType<T, N>`. The constructors remain crate-internal.
 - `find_in_range`'s documentation now correctly states that it still applies
-  the `RegionFlags::should_skip` policy with the empty flag set (the default
-  flags skip `NOMAP` and `DRIVER_MANAGED` regions).
+  the attribute filter with the empty flag set (the default flags skip
+  `NOMAP` and `DRIVER_MANAGED` regions).
 - **`find_in_range_node` renamed.** The method has no NUMA node selector, so
   it is now `Memblock::find_in_range_with_flags`. The kernel reference in its
   documentation still names `memblock_find_in_range_node`.
-- **`RegionFlags` has explicit set operations.** The trait no longer requires
-  `BitOr`/`BitAnd`/`Not`; implementors provide `union`, `intersection` and
-  `difference`, and `contains` is derived from `intersection`. This lowers
-  the boilerplate for custom flag types and decouples the trait from one
-  particular bitwise representation. `MemblockFlags` implements the new
-  operations on top of `bitflags`.
 - Memblock depends only on `the-mm-core`; it has no dependency on the buddy
   or slab allocators. The `the-mm-core` crate is also re-exported at the
   crate root.
+
+### Removed
+
+- **Removed the `RegionFlags` trait and the `F` type parameter.**
+  `Memblock`, `MemblockType`, `MemblockRegion`, `FreeMemRangeIter` and
+  `PfnRangeIter` now always use the concrete `MemblockFlags` type. Custom
+  flag sets and their filtering policy are gone; new Linux flags should be
+  added directly to `MemblockFlags`. This also removes the
+  `RegionFlags::ALLOC` indirection: all allocations now tag the reserved
+  region with `MemblockFlags::RSRV_KERN`, matching the kernel. The custom
+  flag tests and the README section describing them were removed.
 
 ## [0.2.1]
 
@@ -95,6 +122,6 @@ instead of `MemblockRegion::new`.
   structs wrapping another `PhysAddr` implementor, e.g.
   `#[derive(PhysAddr)] struct Addr(usize);`.
 
-[`Memblock::free_mem_ranges`]: https://docs.rs/the-memblock/latest/the_memblock/memblock/struct.Memblock.html
-[`Memblock::mem_pfn_ranges`]: https://docs.rs/the-memblock/latest/the_memblock/memblock/struct.Memblock.html
-[`PhysAddr`]: https://docs.rs/the-memblock/latest/the_memblock/addr/trait.PhysAddr.html
+[`Memblock::free_mem_ranges`]: https://docs.rs/the-memblock/latest/the_memblock/struct.Memblock.html
+[`Memblock::mem_pfn_ranges`]: https://docs.rs/the-memblock/latest/the_memblock/struct.Memblock.html
+[`PhysAddr`]: https://docs.rs/the-memblock/latest/the_memblock/trait.PhysAddr.html

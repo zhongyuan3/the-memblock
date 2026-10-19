@@ -1,39 +1,68 @@
-//! A single contiguous physical memory range.
+//! Physical memory regions and their attribute flags.
 
-use crate::addr::PhysAddr;
-use crate::addr::saturating_add;
-use crate::flags::MemblockFlags;
-use crate::flags::RegionFlags;
+use bitflags::bitflags;
+use the_mm_core::addr::saturating_add;
+
+use crate::PhysAddr;
+
+bitflags! {
+    /// Memory region flags, modeled after Linux kernel's `enum memblock_flags`.
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MemblockFlags: u8 {
+        /// No special request
+        const NONE           = 0x0;
+        /// hotpluggable region
+        const HOTPLUG        = 0x1;
+        /// mirrored region
+        const MIRROR         = 0x2;
+        /// don't add to kernel direct mapping
+        const NOMAP          = 0x4;
+        /// always detected via a driver
+        const DRIVER_MANAGED = 0x8;
+        /// don't initialize struct pages
+        const RSRV_NOINIT    = 0x10;
+        /// memory reserved for kernel use
+        const RSRV_KERN      = 0x20;
+        /// scratch memory for kexec handover
+        const KHO_SCRATCH    = 0x40;
+    }
+}
 
 /// A contiguous range of physical memory `[base, base + size)`.
 ///
 /// Regions are never allowed to overlap within a [`MemblockType`] and are
-/// kept sorted by `base`.
+/// kept sorted by `base`. Per-region attributes are stored as
+/// [`MemblockFlags`].
 ///
-/// Generic over the per-region attribute set `F` (see [`RegionFlags`]); the
-/// default is the Linux-modeled [`MemblockFlags`].
-///
-/// [`MemblockType`]: crate::memblock::MemblockType
+/// [`MemblockType`]: crate::MemblockType
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MemblockRegion<T: PhysAddr, F: RegionFlags = MemblockFlags> {
+pub struct MemblockRegion<T: PhysAddr> {
     base: T,
     size: T,
-    flags: F,
+    flags: MemblockFlags,
 }
 
-impl<T: PhysAddr, F: RegionFlags> MemblockRegion<T, F> {
+impl<T: PhysAddr> MemblockRegion<T> {
     /// An empty region used to fill unused array slots.
-    pub const EMPTY: MemblockRegion<T, F> = MemblockRegion {
+    pub const EMPTY: MemblockRegion<T> = MemblockRegion {
         base: PhysAddr::ZERO,
         size: PhysAddr::ZERO,
-        flags: F::NONE,
+        flags: MemblockFlags::NONE,
     };
 
     /// Creates a region with the given attributes.
-    ///
-    /// [`flags`]: RegionFlags
-    pub const fn with_flags(base: T, size: T, flags: F) -> Self {
+    pub const fn with_flags(base: T, size: T, flags: MemblockFlags) -> Self {
         Self { base, size, flags }
+    }
+
+    /// Creates a region with no special flags.
+    pub const fn new(base: T, size: T) -> Self {
+        Self {
+            base,
+            size,
+            flags: MemblockFlags::NONE,
+        }
     }
 
     /// Returns the start address of the region.
@@ -55,23 +84,8 @@ impl<T: PhysAddr, F: RegionFlags> MemblockRegion<T, F> {
     }
 
     /// Returns the attributes of the region.
-    pub const fn flags(self) -> F {
+    pub const fn flags(self) -> MemblockFlags {
         self.flags
-    }
-}
-
-impl<T: PhysAddr> MemblockRegion<T, MemblockFlags> {
-    /// Creates a region with no special flags.
-    ///
-    /// This constructor is only available for the default [`MemblockFlags`]
-    /// attribute set. Custom flag sets construct regions with
-    /// [`MemblockRegion::with_flags`] and [`RegionFlags::NONE`].
-    pub const fn new(base: T, size: T) -> Self {
-        Self {
-            base,
-            size,
-            flags: MemblockFlags::NONE,
-        }
     }
 }
 

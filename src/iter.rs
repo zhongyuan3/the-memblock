@@ -9,12 +9,11 @@
 //! - [`PfnRangeIter`] mirrors the kernel's `for_each_mem_pfn_range`: it
 //!   iterates `memory` regions as page frame number ranges.
 
-use crate::addr::PhysAddr;
-use crate::flags::MemblockFlags;
-use crate::flags::RegionFlags;
-use crate::memblock::MemblockType;
 use crate::memblock::should_skip_region;
-use crate::region::MemblockRegion;
+use crate::MemblockFlags;
+use crate::MemblockRegion;
+use crate::MemblockType;
+use crate::PhysAddr;
 use the_mm_core::PageFrame;
 
 use core::cmp::max;
@@ -33,16 +32,16 @@ use core::iter::DoubleEndedIterator;
 ///
 /// # Panics
 ///
-/// The associated [`Memblock::mem_pfn_ranges`](crate::memblock::Memblock::mem_pfn_ranges)
+/// The associated [`Memblock::mem_pfn_ranges`](crate::Memblock::mem_pfn_ranges)
 /// constructor panics if `page_size` is zero.
-pub struct PfnRangeIter<'a, T: PageFrame, F: RegionFlags = MemblockFlags> {
+pub struct PfnRangeIter<'a, T: PageFrame> {
     idx: usize,
     page_size: T,
-    mem: &'a [MemblockRegion<T, F>],
+    mem: &'a [MemblockRegion<T>],
 }
 
-impl<'a, T: PageFrame, F: RegionFlags> PfnRangeIter<'a, T, F> {
-    pub(crate) fn new<const N: usize>(mem: &'a MemblockType<T, N, F>, page_size: T) -> Self {
+impl<'a, T: PageFrame> PfnRangeIter<'a, T> {
+    pub(crate) fn new<const N: usize>(mem: &'a MemblockType<T, N>, page_size: T) -> Self {
         Self {
             idx: 0,
             page_size,
@@ -51,7 +50,7 @@ impl<'a, T: PageFrame, F: RegionFlags> PfnRangeIter<'a, T, F> {
     }
 }
 
-impl<'a, T: PageFrame, F: RegionFlags> Iterator for PfnRangeIter<'a, T, F> {
+impl<'a, T: PageFrame> Iterator for PfnRangeIter<'a, T> {
     type Item = (T, T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -76,19 +75,18 @@ impl<'a, T: PageFrame, F: RegionFlags> Iterator for PfnRangeIter<'a, T, F> {
 /// which `for_each_mem_range` (`type_b = None`) and
 /// `for_each_free_mem_range` (`type_b = reserved`) are derived.
 ///
-/// Regions whose attributes are excluded by `flags` are skipped according
-/// to [`RegionFlags::should_skip`]; with the default [`MemblockFlags`] set,
-/// e.g. `NOMAP` regions are skipped unless `flags` contains
+/// Regions whose attributes are excluded by `flags` are skipped, e.g.
+/// `NOMAP` regions are skipped unless `flags` contains
 /// [`MemblockFlags::NOMAP`].
 ///
 /// This is a [`DoubleEndedIterator`]: it can be iterated from both ends,
 /// and `.rev()` yields the free ranges in descending order.
 ///
-/// [`MemblockFlags::NOMAP`]: crate::flags::MemblockFlags::NOMAP
-pub struct FreeMemRangeIter<'a, T: PhysAddr, F: RegionFlags = MemblockFlags> {
-    flags: F,
-    type_a: &'a [MemblockRegion<T, F>],
-    type_b: Option<&'a [MemblockRegion<T, F>]>,
+/// [`MemblockFlags::NOMAP`]: crate::MemblockFlags::NOMAP
+pub struct FreeMemRangeIter<'a, T: PhysAddr> {
+    flags: MemblockFlags,
+    type_a: &'a [MemblockRegion<T>],
+    type_b: Option<&'a [MemblockRegion<T>]>,
     /// Index of the next `memory` region for forward iteration.
     m_lo: usize,
     /// Index of the next `memory` region for backward iteration
@@ -109,19 +107,19 @@ pub struct FreeMemRangeIter<'a, T: PhysAddr, F: RegionFlags = MemblockFlags> {
     bwd_base: T,
 }
 
-impl<'a, T: PhysAddr, F: RegionFlags> FreeMemRangeIter<'a, T, F> {
+impl<'a, T: PhysAddr> FreeMemRangeIter<'a, T> {
     pub(crate) fn new<const N: usize>(
-        type_a: &'a MemblockType<T, N, F>,
-        type_b: Option<&'a MemblockType<T, N, F>>,
-        flags: F,
+        type_a: &'a MemblockType<T, N>,
+        type_b: Option<&'a MemblockType<T, N>>,
+        flags: MemblockFlags,
     ) -> Self {
         Self::from_slices(type_a.regions(), type_b.map(|t| t.regions()), flags)
     }
 
     pub(crate) fn from_slices(
-        type_a: &'a [MemblockRegion<T, F>],
-        type_b: Option<&'a [MemblockRegion<T, F>]>,
-        flags: F,
+        type_a: &'a [MemblockRegion<T>],
+        type_b: Option<&'a [MemblockRegion<T>]>,
+        flags: MemblockFlags,
     ) -> Self {
         Self {
             m_lo: 0,
@@ -137,7 +135,7 @@ impl<'a, T: PhysAddr, F: RegionFlags> FreeMemRangeIter<'a, T, F> {
     }
 }
 
-impl<'a, T: PhysAddr, F: RegionFlags> Iterator for FreeMemRangeIter<'a, T, F> {
+impl<'a, T: PhysAddr> Iterator for FreeMemRangeIter<'a, T> {
     type Item = (T, T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -215,7 +213,7 @@ impl<'a, T: PhysAddr, F: RegionFlags> Iterator for FreeMemRangeIter<'a, T, F> {
     }
 }
 
-impl<'a, T: PhysAddr, F: RegionFlags> DoubleEndedIterator for FreeMemRangeIter<'a, T, F> {
+impl<'a, T: PhysAddr> DoubleEndedIterator for FreeMemRangeIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let mem = self.type_a;
         let res = self.type_b.unwrap_or(&[]);
@@ -299,12 +297,12 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::*;
-    use crate::memblock::Memblock;
+    use crate::Memblock;
 
     fn mb_with(regions: &[(usize, usize, MemblockFlags)]) -> Memblock<usize, 8> {
         let mut mb = Memblock::<usize, 8>::new();
         for &(base, size, flags) in regions {
-            mb.add(base, size, flags).unwrap();
+            mb.add_with_flags(base, size, flags).unwrap();
         }
         mb
     }
@@ -433,7 +431,7 @@ mod tests {
         // Forward and backward consumption must partition all free pieces.
         let mut mb = Memblock::<usize, 8>::new();
         for base in [0x1000, 0x4000, 0x8000] {
-            mb.add(base, 0x1000, MemblockFlags::NONE).unwrap();
+            mb.add(base, 0x1000).unwrap();
         }
         reserve(&mut mb, 0x1400, 0x200);
         reserve(&mut mb, 0x4200, 0x100);
