@@ -6,6 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- **Removed non-essential `Debug` implementations.** `Memblock`,
+  `MemblockType`, `MemblockRegion` and `MemblockFlags` no longer implement
+  `Debug`; only `Error` keeps it for error handling. The tests compare values
+  directly instead of formatting them. This is a breaking change for code
+  that relied on the derived formatting.
 - **Flattened the module layout.** `Error`, `Memblock`, `MemblockType`,
   `MemblockRegion`, `MemblockFlags` and the range iterators are now exported
   only from the crate root, and the implementation modules are private. The

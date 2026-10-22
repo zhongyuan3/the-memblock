@@ -82,9 +82,7 @@ fn current_limit_bounds_allocations() {
     assert_eq!(p, 0x1400);
 
     // The limit applies even when the caller passes a larger end.
-    let p = mb
-        .phys_alloc_range(0x100, 0x100, 0, usize::MAX)
-        .unwrap();
+    let p = mb.phys_alloc_range(0x100, 0x100, 0, usize::MAX).unwrap();
     assert_eq!(p, 0x1300);
 
     // Raising the limit allows higher allocations again. Top-down picks the
@@ -115,10 +113,7 @@ fn region_array_can_overflow() {
     mb.add(0x1000, 0x100).unwrap();
     mb.add(0x2000, 0x100).unwrap();
     // A third, non-mergeable region cannot fit.
-    assert!(matches!(
-        mb.add(0x3000, 0x100),
-        Err(Error::OverCapacity)
-    ));
+    assert!(matches!(mb.add(0x3000, 0x100), Err(Error::OverCapacity)));
 }
 
 #[test]
@@ -197,13 +192,14 @@ fn reserved_attribute_lifecycle() {
             .contains(MemblockFlags::RSRV_NOINIT)
     );
     mb.reserved_clear_noinit(0x0, 0x100).unwrap();
-    assert_eq!(mb.reserved().regions()[0].flags(), NONE);
+    assert!(mb.reserved().regions()[0].flags() == NONE);
 }
 
 #[test]
 fn allocation_filters_nomap_memory() {
     let mut mb = Memblock::<usize, 8>::new();
-    mb.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
+    mb.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP)
+        .unwrap();
     mb.add(0x2000, 0x1000).unwrap();
 
     // Default: NOMAP memory is not used.
@@ -212,8 +208,11 @@ fn allocation_filters_nomap_memory() {
 
     // Explicitly requesting NOMAP allows allocating from it.
     let mut mb2 = Memblock::<usize, 8>::new();
-    mb2.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP).unwrap();
-    let p = mb2.phys_alloc_with_flags(0x100, 0x100, MemblockFlags::NOMAP).unwrap();
+    mb2.add_with_flags(0x1000, 0x1000, MemblockFlags::NOMAP)
+        .unwrap();
+    let p = mb2
+        .phys_alloc_with_flags(0x100, 0x100, MemblockFlags::NOMAP)
+        .unwrap();
     assert_eq!(p, 0x1f00);
 }
 
@@ -273,23 +272,21 @@ fn clone_is_independent() {
     assert!(!mb.bottom_up());
     assert!(mb.reserved().is_empty());
     assert_eq!(copy.reserved_size(), 0x100);
-    assert_eq!(mb, mb.clone());
+    assert!(mb == mb.clone());
 }
 
 #[test]
 fn adjacency_with_different_flags_stays_split() {
     let mut mb = Memblock::<usize, 8>::new();
     mb.add(0x1000, 0x100).unwrap();
-    mb.add_with_flags(0x1100, 0x100, MemblockFlags::NOMAP).unwrap();
+    mb.add_with_flags(0x1100, 0x100, MemblockFlags::NOMAP)
+        .unwrap();
     assert_eq!(mb.memory().count(), 2);
 
     // Clearing the flag lets them merge.
     mb.clear_nomap(0x1100, 0x100).unwrap();
     assert_eq!(mb.memory().count(), 1);
-    assert_eq!(
-        mb.memory().regions()[0],
-        the_memblock::MemblockRegion::new(0x1000, 0x200)
-    );
+    assert!(mb.memory().regions()[0] == the_memblock::MemblockRegion::new(0x1000, 0x200));
 }
 
 #[test]

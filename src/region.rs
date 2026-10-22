@@ -8,7 +8,7 @@ use crate::PhysAddr;
 bitflags! {
     /// Memory region flags, modeled after Linux kernel's `enum memblock_flags`.
     #[repr(transparent)]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Clone, Copy, PartialEq, Eq)]
     pub struct MemblockFlags: u8 {
         /// No special request
         const NONE           = 0x0;
@@ -36,7 +36,7 @@ bitflags! {
 /// [`MemblockFlags`].
 ///
 /// [`MemblockType`]: crate::MemblockType
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct MemblockRegion<T: PhysAddr> {
     base: T,
     size: T,
@@ -98,7 +98,7 @@ mod tests {
         let r = MemblockRegion::new(0x1000usize, 0x200);
         assert_eq!(r.base(), 0x1000);
         assert_eq!(r.size(), 0x200);
-        assert_eq!(r.flags(), MemblockFlags::NONE);
+        assert!(r.flags() == MemblockFlags::NONE);
     }
 
     #[test]
@@ -127,19 +127,16 @@ mod tests {
         let r = MemblockRegion::<usize>::EMPTY;
         assert_eq!(r.base(), 0);
         assert_eq!(r.size(), 0);
-        assert_eq!(r.flags(), MemblockFlags::NONE);
-        assert_eq!(r, MemblockRegion::new(0, 0));
+        assert!(r.flags() == MemblockFlags::NONE);
+        assert!(r == MemblockRegion::new(0, 0));
     }
 
     #[test]
     fn region_is_copy_and_eq() {
         let a = MemblockRegion::new(0x1000usize, 0x200);
         let b = a;
-        assert_eq!(a, b);
-        assert_ne!(a, MemblockRegion::new(0x1000, 0x201));
-        assert_ne!(
-            a,
-            MemblockRegion::with_flags(0x1000, 0x200, MemblockFlags::NOMAP)
-        );
+        assert!(a == b);
+        assert!(a != MemblockRegion::new(0x1000, 0x201));
+        assert!(a != MemblockRegion::with_flags(0x1000, 0x200, MemblockFlags::NOMAP));
     }
 }

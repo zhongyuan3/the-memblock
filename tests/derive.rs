@@ -179,13 +179,10 @@ fn derived_type_out_of_memory() {
 #[test]
 fn derived_type_over_u64() {
     let mut mb = Memblock::<U64Addr, 8>::new();
-    mb.add(U64Addr(0x8000_0000), U64Addr(0x4000_0000))
-        .unwrap();
+    mb.add(U64Addr(0x8000_0000), U64Addr(0x4000_0000)).unwrap();
     mb.reserve_kern(U64Addr(0x8000_0000), U64Addr(0x20_0000))
         .unwrap();
-    let p = mb
-        .phys_alloc(U64Addr(0x1000), U64Addr(0x1000))
-        .unwrap();
+    let p = mb.phys_alloc(U64Addr(0x1000), U64Addr(0x1000)).unwrap();
     assert_eq!(p, U64Addr(0xBFFF_F000));
 }
 

@@ -41,8 +41,8 @@ pub use crate::region::MemblockFlags;
 pub use crate::region::MemblockRegion;
 pub use the_memblock_derive::PhysAddr;
 pub use the_mm_core;
-pub use the_mm_core::addr::PhysAddr;
 pub use the_mm_core::PageFrame;
+pub use the_mm_core::addr::PhysAddr;
 
 mod iter;
 mod memblock;

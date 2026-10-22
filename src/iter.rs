@@ -9,11 +9,11 @@
 //! - [`PfnRangeIter`] mirrors the kernel's `for_each_mem_pfn_range`: it
 //!   iterates `memory` regions as page frame number ranges.
 
-use crate::memblock::should_skip_region;
 use crate::MemblockFlags;
 use crate::MemblockRegion;
 use crate::MemblockType;
 use crate::PhysAddr;
+use crate::memblock::should_skip_region;
 use the_mm_core::PageFrame;
 
 use core::cmp::max;
