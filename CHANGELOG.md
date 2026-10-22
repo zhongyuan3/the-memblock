@@ -10,7 +10,8 @@ All notable changes to this project are documented in this file.
   `MemblockType`, `MemblockRegion` and `MemblockFlags` no longer implement
   `Debug`; only `Error` keeps it for error handling. The tests compare values
   directly instead of formatting them. This is a breaking change for code
-  that relied on the derived formatting.
+  that relied on the derived formatting. The `PhysAddr` derive macro no longer
+  generates `Debug` either; add it to the derive list explicitly if needed.
 - **Flattened the module layout.** `Error`, `Memblock`, `MemblockType`,
   `MemblockRegion`, `MemblockFlags` and the range iterators are now exported
   only from the crate root, and the implementation modules are private. The

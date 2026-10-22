@@ -9,7 +9,7 @@ use the_memblock::PhysAddr;
 
 const NONE: MemblockFlags = MemblockFlags::NONE;
 
-#[derive(PhysAddr)]
+#[derive(PhysAddr, Debug)]
 #[repr(transparent)]
 struct Addr(usize);
 
@@ -37,7 +37,7 @@ impl PageFrame for Addr {
     }
 }
 
-#[derive(PhysAddr)]
+#[derive(PhysAddr, Debug)]
 struct U64Addr(u64);
 
 #[test]
@@ -83,9 +83,6 @@ fn derived_supertrait_impls() {
     // Add + Sub.
     assert_eq!(Addr(1) + Addr(2), Addr(3));
     assert_eq!(Addr(3) - Addr(1), Addr(2));
-
-    // Debug.
-    assert_eq!(format!("{:?}", Addr(5)), "Addr(5)");
 }
 
 #[test]

@@ -65,8 +65,9 @@ The `PhysAddr` trait is implemented for every unsigned primitive, but you can
 wrap a primitive in your own type with the `#[derive(PhysAddr)]` macro. The
 derive transparently forwards all address arithmetic to the inner type and
 also provides the supertrait implementations the trait requires
-(`Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Debug`,
-`Add`, `Sub`):
+(`Clone`, `Copy`, `PartialEq`, `Eq`, `PartialOrd`, `Ord`, `Add`, `Sub`).
+`Debug` is not generated; add it to the derive list if you need to format the
+address type:
 
 ```rust
 use the_memblock::Memblock;
@@ -79,7 +80,7 @@ struct Addr(usize);
 let mut mb = Memblock::<Addr, 8>::new();
 mb.add(Addr(0x1000), Addr(0x1000)).unwrap();
 let base = mb.phys_alloc(Addr(0x100), Addr(0x100)).unwrap();
-assert_eq!(base, Addr(0x1f00));
+assert!(base == Addr(0x1f00));
 ```
 
 Only concrete single-field tuple structs are supported. Wrap a type that
